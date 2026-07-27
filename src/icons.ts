@@ -1,11 +1,10 @@
 import { Resvg } from "@resvg/resvg-js"
 
 type RemixIconCategories =
-	"Arrows" | "Buildings" | "Business" | "Communication"
-	| "Design" | "Development" | "Device" | "Document"
-	| "Editor" | "Finance" | "Games & Sports" | "Health & Medical"
-	| "Logos" | "Map" | "Media" | "Others" | "System" | "User & Faces"
-	| "Weather";
+	"Arrows" | "Buildings" | "Business" | "Communication" | "Design"
+	| "Development" | "Device" | "Document" | "Editor"
+	| "Finance" | "Games & Sports" | "Health & Medical" | "Logos"
+	| "Map" | "Media" | "Others" | "System" | "User & Faces" | "Weather";
 
 const getLucideSvgIconUrl = (iconName: string) => `https://raw.githubusercontent.com/lucide-icons/lucide/refs/heads/main/icons/${iconName}.svg`
 
