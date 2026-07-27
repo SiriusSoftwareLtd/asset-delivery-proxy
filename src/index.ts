@@ -2,6 +2,7 @@ import { Context, Hono } from "hono"
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
 import { rateLimit } from "./rateLimiter";
+import { ContentfulStatusCode } from "hono/utils/http-status";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>()
 
@@ -19,21 +20,23 @@ app.get("/assets/:assetId", async (c) => {
 	const assetCache = c.env.assetCache
 
 	if (!isSecureMode) {
-		// proxy request to roblox's asset delivery service
-		const robloxAssetUrl = `https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`
-		const robloxResponse = await fetch(robloxAssetUrl)
-
-		if (!robloxResponse.ok) {
-			return c.json({ error: "Failed to fetch asset from Roblox" }, 424);
-		}
-
-		const robloxData = await robloxResponse.arrayBuffer()
-		await assetCache.put(assetId, robloxData)
-
-		return c.body(robloxData, 200, {
-			"Content-Type": robloxResponse.headers.get("Content-Type") || "application/octet-stream",
-		})
+		return c.json({ error: "Secure mode is required" }, 403)
 	}
+	// proxy request to roblox's asset delivery service
+	const robloxAssetUrl = `https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`
+	const robloxResponse = await fetch(robloxAssetUrl)
+
+	if (!robloxResponse.ok) {
+		console.log(robloxResponse.status, robloxResponse.statusText)
+		return c.json(await robloxResponse.json(), robloxResponse.status as ContentfulStatusCode);
+	}
+
+	const robloxData = await robloxResponse.arrayBuffer()
+	await assetCache.put(assetId, robloxData)
+
+	return c.body(robloxData, 200, {
+		"Content-Type": robloxResponse.headers.get("Content-Type") || "application/octet-stream",
+	})
 });
 
 export default app
