@@ -1,13 +1,13 @@
 import { Resvg } from "@resvg/resvg-js"
 
-const getLucideSvgIconUrl = (iconName: string) => `https://raw.githubusercontent.com/lucide-icons/lucide/refs/heads/main/icons/${iconName}.svg`
-
 type RemixIconCategories =
 	"Arrows" | "Buildings" | "Business" | "Communication"
 	| "Design" | "Development" | "Device" | "Document"
 	| "Editor" | "Finance" | "Games & Sports" | "Health & Medical"
 	| "Logos" | "Map" | "Media" | "Others" | "System" | "User & Faces"
 	| "Weather";
+
+const getLucideSvgIconUrl = (iconName: string) => `https://raw.githubusercontent.com/lucide-icons/lucide/refs/heads/main/icons/${iconName}.svg`
 
 const getRemixIconUrl = (iconCategory: RemixIconCategories, iconName: string) => `https://raw.githubusercontent.com/Remix-Design/RemixIcon/refs/heads/master/icons/${iconCategory}/${iconName}.svg`
 
