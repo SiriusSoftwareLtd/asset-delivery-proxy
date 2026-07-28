@@ -8,9 +8,7 @@ const RATE_LIMIT_CONTEXT_KEY = '.rateLimit';
  * Rate limiting binding as defined by Cloudflare Workers.
  * @see https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/
  */
-export interface RateLimitBinding {
-  limit(options: { key: string }): Promise<{ success: boolean }>;
-}
+export type RateLimitBinding = RateLimit;
 
 /**
  * Function that returns the key to rate limit on for a given request.
@@ -48,5 +46,5 @@ export const rateLimit = (rateLimitBinding: RateLimitBinding, keyFunc: RateLimit
  * or undefined if the rate limiting middleware was not applied.
  */
 export const rateLimitPassed = (c: Context): boolean | undefined => {
-  return c.get(RATE_LIMIT_CONTEXT_KEY) as boolean | undefined;
+  return c.get(RATE_LIMIT_CONTEXT_KEY);
 };

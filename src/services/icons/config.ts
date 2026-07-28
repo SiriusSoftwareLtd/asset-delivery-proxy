@@ -1,4 +1,4 @@
-import type { IconConfig } from './icons';
+import type { IconConfig } from './generator';
 
 export type IconPackName = 'lucide' | 'feather' | 'remix' | 'font-awesome' | 'hero';
 

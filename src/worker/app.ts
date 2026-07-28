@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { getErrorFields, logEvent, observeRequests } from './observability';
-import { rateLimit } from './rateLimiter';
-import { registerRoutes } from './routes';
-import type { AppEnvironment } from './types';
+import { errorResponse } from '../http/responses';
+import { getErrorFields, logEvent, observeRequests } from '../middleware/observability';
+import { rateLimit } from '../middleware/rateLimiter';
+import { registerRoutes } from '../routes';
+import type { AppEnvironment } from '../types/app';
 
 export const app = new Hono<AppEnvironment>();
 
@@ -26,7 +27,7 @@ registerRoutes(app);
  */
 app.onError((error, c) => {
   const requestId = c.get('requestId');
-  const status = error instanceof HTTPException ? error.status : 500;
+  const status: ContentfulStatusCode = error instanceof HTTPException ? error.status : 500;
 
   logEvent(
     'error',
@@ -43,21 +44,7 @@ app.onError((error, c) => {
     c.env,
   );
 
-  return c.json(
-    {
-      error: error instanceof HTTPException ? error.message : 'Internal server error',
-      requestId,
-    },
-    status as ContentfulStatusCode,
-  );
+  return errorResponse(c, error instanceof HTTPException ? error.message : 'Internal server error', status);
 });
 
-app.notFound((c) => {
-  return c.json(
-    {
-      error: 'Not found',
-      requestId: c.get('requestId'),
-    },
-    404,
-  );
-});
+app.notFound((c) => errorResponse(c, 'Not found', 404));

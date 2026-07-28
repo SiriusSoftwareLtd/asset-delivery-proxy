@@ -1,10 +1,13 @@
 import { tracing } from 'cloudflare:workers';
 import { createMiddleware } from 'hono/factory';
-import type { AppEnvironment, TraceSpan } from './types';
+import type { AppEnvironment } from '../types/app';
 
 export type ReportLevel = 'off' | 'error' | 'warn' | 'info' | 'debug';
 export type LogLevel = Exclude<ReportLevel, 'off'>;
 export type ReportLevelSource = string | { OBSERVABILITY_REPORT_LEVEL?: string };
+type TraceSpan = {
+  setAttribute(name: string, value?: boolean | number | string): void;
+};
 
 const REPORT_LEVEL_PRIORITY: Record<ReportLevel, number> = {
   off: 0,
@@ -41,17 +44,17 @@ export function enterTraceSpan<T>(
   callback: (span: TraceSpan) => T | Promise<T>,
   source: ReportLevelSource,
 ): T | Promise<T> {
-  if (getReportLevel(source) !== 'info' && getReportLevel(source) !== 'debug') {
+  const reportLevel = getReportLevel(source);
+  if (reportLevel !== 'info' && reportLevel !== 'debug') {
     return callback({ setAttribute() {} });
   }
 
-  const tracingApi = tracing as unknown as
-    | {
-        enterSpan?: (spanName: string, spanCallback: (span: TraceSpan) => T | Promise<T>) => T | Promise<T>;
-      }
-    | undefined;
+  // Older local workerd builds may not expose the tracing API even when the generated types do.
+  if (!tracing?.enterSpan) {
+    return callback({ setAttribute() {} });
+  }
 
-  return tracingApi?.enterSpan ? tracingApi.enterSpan(name, callback) : callback({ setAttribute() {} });
+  return tracing.enterSpan(name, callback);
 }
 
 /** Writes a structured event to Cloudflare Workers Logs. */

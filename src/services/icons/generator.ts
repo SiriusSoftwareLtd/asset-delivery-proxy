@@ -1,6 +1,6 @@
 import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
-import { enterTraceSpan, type LogLevel, parseReportLevel, shouldReport } from './observability';
+import { enterTraceSpan, type LogLevel, parseReportLevel, shouldReport } from '../../middleware/observability';
 
 /*
  * Initialize once per Worker isolate. Individual requests await the same promise,

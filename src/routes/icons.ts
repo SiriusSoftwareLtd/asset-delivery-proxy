@@ -1,9 +1,9 @@
-import type { Context } from 'hono';
-import type { BlankInput } from 'hono/types';
-import { parseIconConfig } from '../iconPacks';
-import { getPngFromSvgIcon, IconError } from '../icons';
-import { enterTraceSpan, getErrorFields, logEvent } from '../observability';
-import type { AppEnvironment, CacheStatus } from '../types';
+import { errorResponse } from '../http/responses';
+import { enterTraceSpan, getErrorFields, logEvent } from '../middleware/observability';
+import { parseIconConfig } from '../services/icons/config';
+import { getPngFromSvgIcon, IconError } from '../services/icons/generator';
+import type { AppContext, CacheStatus } from '../types/app';
+import { bytesToBase64, mapWithConcurrency } from '../utils/batch';
 
 const ICON_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
@@ -56,13 +56,11 @@ export type IconDeliveryResult =
       error: string;
     };
 
-type IconContext = Context<AppEnvironment, string, BlankInput>;
-
 export async function fetchIcon(
   iconPack: string,
   iconName: string,
   query: URLSearchParams,
-  c: IconContext,
+  c: AppContext,
 ): Promise<IconDeliveryResult> {
   return enterTraceSpan(
     'icon.delivery',
@@ -164,9 +162,9 @@ export async function fetchIcon(
   );
 }
 
-export async function handleIconRequest(c: Context<AppEnvironment, '/icons/:iconPack/:iconName', BlankInput>) {
-  const iconPack = c.req.param('iconPack');
-  const iconName = c.req.param('iconName');
+export async function handleIconRequest(c: AppContext) {
+  const iconPack = c.req.param('iconPack') ?? '';
+  const iconName = c.req.param('iconName') ?? '';
   const result = await fetchIcon(iconPack, iconName, new URL(c.req.url).searchParams, c);
 
   c.header('X-Icon-Pack', iconPack);
@@ -182,7 +180,7 @@ export async function handleIconRequest(c: Context<AppEnvironment, '/icons/:icon
     });
   }
 
-  return c.json({ error: result.error, requestId: c.get('requestId') }, result.status);
+  return errorResponse(c, result.error, result.status);
 }
 
 const MAX_BATCH_ICONS = 50;
@@ -228,25 +226,25 @@ function iconResultToBatchItem(result: IconDeliveryResult) {
   };
 }
 
-export async function handleIconBatchRequest(c: Context<AppEnvironment>) {
+export async function handleIconBatchRequest(c: AppContext) {
   const requestId = c.get('requestId');
   let body: IconBatchBody;
 
   try {
     body = await c.req.json<IconBatchBody>();
   } catch {
-    return c.json({ error: 'Request body must be valid JSON', requestId }, 400);
+    return errorResponse(c, 'Request body must be valid JSON', 400);
   }
 
   if (!isRecord(body) || !Array.isArray(body.icons)) {
-    return c.json({ error: 'icons must be a non-empty array', requestId }, 400);
+    return errorResponse(c, 'icons must be a non-empty array', 400);
   }
-  if (body.icons.length === 0) return c.json({ error: 'icons must be a non-empty array', requestId }, 400);
+  if (body.icons.length === 0) return errorResponse(c, 'icons must be a non-empty array', 400);
   if (body.icons.length > MAX_BATCH_ICONS) {
-    return c.json({ error: `A maximum of ${MAX_BATCH_ICONS} icons is allowed`, requestId }, 400);
+    return errorResponse(c, `A maximum of ${MAX_BATCH_ICONS} icons is allowed`, 400);
   }
   if (!body.icons.every(isValidBatchItem)) {
-    return c.json({ error: 'Each icon must include string iconPack, iconName, and options fields', requestId }, 400);
+    return errorResponse(c, 'Each icon must include string iconPack, iconName, and options fields', 400);
   }
 
   const results = await mapWithConcurrency(body.icons, MAX_BATCH_CONCURRENCY, async (item) => {
@@ -257,29 +255,4 @@ export async function handleIconBatchRequest(c: Context<AppEnvironment>) {
 
   c.set('cacheStatus', 'unknown');
   return c.json({ requestId, results }, 200);
-}
-
-async function mapWithConcurrency<T, R>(items: T[], limit: number, callback: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (true) {
-      const index = nextIndex++;
-      if (index >= items.length) return;
-      results[index] = await callback(items[index]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
-}
-
-function bytesToBase64(data: Uint8Array<ArrayBuffer>): string {
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < data.length; offset += chunkSize) {
-    binary += String.fromCharCode(...data.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
 }

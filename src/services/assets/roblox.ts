@@ -118,10 +118,6 @@ export function getFirstRobloxV2Discovery(value: unknown): RobloxV2Discovery {
   throw new MalformedRobloxV2ResponseError('Roblox v2 response has no valid locations');
 }
 
-export function getFirstRobloxV2Location(value: unknown): string {
-  return getFirstRobloxV2Discovery(value).location;
-}
-
 export async function parseRobloxV2Discovery(response: Response): Promise<RobloxV2Discovery> {
   try {
     return getFirstRobloxV2Discovery(await response.json());
@@ -129,8 +125,4 @@ export async function parseRobloxV2Discovery(response: Response): Promise<Roblox
     if (error instanceof MalformedRobloxV2ResponseError) throw error;
     throw new MalformedRobloxV2ResponseError('Roblox v2 returned invalid JSON');
   }
-}
-
-export async function parseRobloxV2Location(response: Response): Promise<string> {
-  return (await parseRobloxV2Discovery(response)).location;
 }

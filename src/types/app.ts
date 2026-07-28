@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import type { BlankInput } from 'hono/types';
 
 export type CacheStatus =
   | 'unknown'
@@ -20,7 +21,7 @@ export type AppEnvironment = {
   };
 };
 
-export type AppContext = Context<AppEnvironment>;
+export type AppContext = Context<AppEnvironment, string, BlankInput>;
 
 export type CachedAssetMetadata =
   | {
@@ -33,7 +34,3 @@ export type CachedAssetMetadata =
       kind: 'not-found';
       timestamp: number;
     };
-
-export type TraceSpan = {
-  setAttribute(name: string, value: unknown): void;
-};

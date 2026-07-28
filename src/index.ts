@@ -1,4 +1,4 @@
-import { app } from './app';
+import { app } from './worker/app';
 
 export default {
   fetch(request, env, ctx) {

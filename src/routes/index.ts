@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { AppEnvironment } from '../types';
+import type { AppEnvironment } from '../types/app';
 import { handleAssetBatchRequest, handleAssetDelivery } from './assetDelivery';
 import { handleIconBatchRequest, handleIconRequest } from './icons';
 
