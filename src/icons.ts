@@ -351,7 +351,6 @@ async function getIconContent(iconConfig: IconConfig, reportLevel: string): Prom
       span.setAttribute('icon.provider', iconConfig.iconType);
 
 			const url = getIconUrl(iconConfig);
-      console.log("Getting icon from", url)
 
       try {
         const response = await fetch(url, {
