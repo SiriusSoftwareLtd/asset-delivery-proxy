@@ -1,8 +1,6 @@
 {
-	"files.associations": {
-		"wrangler.json": "jsonc"
-	},
-	"conventionalCommits.scopes": [
-		"worker"
-	]
+  "files.associations": {
+    "wrangler.json": "jsonc"
+  },
+  "conventionalCommits.scopes": ["worker"]
 }

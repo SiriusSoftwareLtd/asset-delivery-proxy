@@ -1,0 +1,31 @@
+name: CI
+permissions:
+  contents: read
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    name: Lint, Format, Typecheck and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Check
+        run: pnpm lint
+
+      - name: Run Tests
+        run: pnpm test
