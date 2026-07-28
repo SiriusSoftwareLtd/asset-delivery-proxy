@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { Hono, MiddlewareHandler } from "hono";
+import { describe, expect, it, vi } from "vitest";
 import { rateLimit, RateLimitBinding, rateLimitPassed } from "../src/rateLimiter";
 
 // Creates a rate limiter that always allows requests
@@ -66,7 +67,7 @@ describe("rateLimit middleware", () => {
 
 		const res = await app.request("http://localhost/api/hello");
 		expect(res.status).toBe(429);
-		expect(await res.text()).toBe("rate limited");
+		expect(await res.text()).toBe("Too Many Requests");
 	});
 
 	it("bypasses rate limiting when keyFunc returns empty string", async () => {
@@ -83,7 +84,7 @@ describe("rateLimit middleware", () => {
 		expect(res.status).toBe(200);
 		expect(await res.text()).toBe("Hello");
 		expect(consoleSpy).toHaveBeenCalledWith(
-			"the provided keyFunc returned an empty rate limiting key: bypassing rate limits"
+			"Rate limiting key is empty, skipping rate limiting."
 		);
 
 		consoleSpy.mockRestore();
@@ -246,7 +247,7 @@ describe("rateLimit integration behavior", () => {
 			headers: { "X-Forwarded-For": ip },
 		});
 		expect(res.status).toBe(429);
-		expect(await res.text()).toBe("rate limited");
+		expect(await res.text()).toBe("Too Many Requests");
 	});
 
 	it("should track different IPs separately", async () => {
