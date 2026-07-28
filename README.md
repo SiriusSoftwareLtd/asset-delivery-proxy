@@ -5,6 +5,7 @@ A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. I
 ## Features
 
 - Serves Roblox assets from `GET /assets/:assetId`.
+- Serves rendered provider icons from `GET /icons/:iconPack/:iconName`.
 - Rejects malformed asset IDs and requests that do not opt into secure mode.
 - Supports Roblox Asset Delivery v1 and an opt-in v2 path controlled by Cloudflare Flagship.
 - Caches assets and cache metadata in Workers KV; 404 responses are negatively cached for five minutes.
@@ -45,6 +46,18 @@ Successful responses include the asset bytes and these useful headers:
 | `X-Cache-Status` | Cache outcome, such as `hit`, `miss`, or `negative-hit`. |
 | `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or fetched response. |
 | `X-Asset-Extension` | Detected asset filename extension, when known. |
+
+### Icons
+
+```http
+GET /icons/:iconPack/:iconName?size=64
+```
+
+Supported packs are `lucide`, `feather`, `remix`, `font-awesome`, and `hero`. Icon names use lowercase letters, numbers, hyphens, and underscores. The `size` query parameter defaults to `64` and must be between 1 and 1024.
+
+Pack-specific options are `category` for Remix icons, `style` (`brands`, `regular`, or `solid`) for Font Awesome, and `sourceSize` (`16`, `20`, or `24`) plus `style` (`outline` or `solid`) for Heroicons. Remix requires `category`; Heroicons defaults to source size `24` and `outline` style.
+
+Successful icon responses are PNG bytes and include `Content-Type: image/png`, `Cache-Control`, `X-Request-ID`, `X-Icon-Pack`, and the `X-Cache-*` headers. Invalid requests and unsupported packs return `400`; missing icons return `404`; upstream timeouts return `504`; other generation failures return `502`.
 
 Errors use a JSON body containing `error` and `requestId` fields. Upstream errors other than 404 are passed through with their original status and content type.
 
