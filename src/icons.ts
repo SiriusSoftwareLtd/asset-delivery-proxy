@@ -30,8 +30,8 @@ const REMIX_ICON_CATEGORIES = [
   'Weather',
 ] as const;
 
-type RemixIconCategory = (typeof REMIX_ICON_CATEGORIES)[number];
-type FontAwesomeStyle = 'brands' | 'regular' | 'solid';
+export type RemixIconCategory = (typeof REMIX_ICON_CATEGORIES)[number];
+export type FontAwesomeStyle = 'brands' | 'regular' | 'solid';
 
 type BaseIconConfig = {
   iconName: string;
@@ -350,14 +350,15 @@ async function getIconContent(iconConfig: IconConfig, reportLevel: string): Prom
     async (span) => {
       span.setAttribute('icon.provider', iconConfig.iconType);
 
-      const url = getIconUrl(iconConfig);
+			const url = getIconUrl(iconConfig);
+      console.log("Getting icon from", url)
 
       try {
         const response = await fetch(url, {
           headers: {
             Accept: 'image/svg+xml',
           },
-          redirect: 'error',
+          redirect: 'manual',
           signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
         });
 
