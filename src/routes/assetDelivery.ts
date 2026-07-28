@@ -17,207 +17,158 @@ const ASSET_ID_PATTERN = /^\d{1,20}$/;
 const NEGATIVE_CACHE_TTL_SECONDS = 5 * 60;
 const ASSET_EXTENSION_HEADER = 'X-Asset-Extension';
 
-export async function handleAssetDelivery(c: Context<AppEnvironment, '/assets/:assetId', BlankInput>) {
+export type AssetDeliveryResult =
+  | {
+      assetId: string;
+      kind: 'asset';
+      status: 200;
+      data: Uint8Array<ArrayBuffer>;
+      contentType: string;
+      extension?: string;
+      cacheStatus: CacheStatus;
+      cacheHit: boolean;
+      timestamp?: number;
+      upstreamStatus?: number;
+    }
+  | {
+      assetId: string;
+      kind: 'not-found' | 'error';
+      status: number;
+      error: string;
+      cacheStatus: CacheStatus;
+      cacheHit: boolean;
+      contentType?: string;
+      data?: Uint8Array<ArrayBuffer>;
+      timestamp?: number;
+      upstreamStatus?: number;
+    };
+
+type AssetContext = Context<AppEnvironment, string, BlankInput>;
+
+export async function fetchAsset(assetId: string, c: AssetContext, request: Request): Promise<AssetDeliveryResult> {
   return enterTraceSpan(
     'asset.delivery',
     async (span) => {
       const requestId = c.get('requestId');
-      const assetId = c.req.param('assetId');
-      const isSecureMode = c.req.header('X-Rayfield-Secure-Mode') === 'true';
       const assetCache = c.env.assetCache;
-
-      /*
-       * assetId is intentionally excluded from trace attributes because
-       * it has high cardinality. It remains available in structured logs.
-       */
-      span.setAttribute('asset.secure_mode', isSecureMode);
-
-      if (!ASSET_ID_PATTERN.test(assetId)) {
-        throw new HTTPException(400, {
-          message: 'Invalid Roblox asset ID',
-        });
-      }
-
-      if (!isSecureMode) {
-        c.set('cacheStatus', 'bypass');
-        span.setAttribute('cache.status', 'bypass');
-
-        logEvent(
-          'warn',
-          'asset.access.denied',
-          {
-            requestId,
-            assetId,
-            reason: 'secure-mode-required',
-          },
-          c.env,
-        );
-
-        return c.json(
-          {
-            error: 'Secure mode is required',
-            requestId,
-          },
-          403,
-        );
-      }
-
-      let cachedValue: ArrayBuffer | null = null;
-      let cachedMetadata: CachedAssetMetadata | null = null;
+      let cacheStatus: CacheStatus = 'unknown';
       let assetExtension: string | undefined;
       let assetTypeId: number | undefined;
       let useAssetDeliveryV2 = false;
+
+      /* assetId is intentionally excluded from trace attributes because it has high cardinality. */
+      span.setAttribute('asset.secure_mode', request.headers.get('X-Rayfield-Secure-Mode') === 'true');
+
+      if (!ASSET_ID_PATTERN.test(assetId)) {
+        throw new HTTPException(400, { message: 'Invalid Roblox asset ID' });
+      }
+
+      if (request.headers.get('X-Rayfield-Secure-Mode') !== 'true') {
+        cacheStatus = 'bypass';
+        span.setAttribute('cache.status', cacheStatus);
+        logEvent('warn', 'asset.access.denied', { requestId, assetId, reason: 'secure-mode-required' }, c.env);
+        return {
+          assetId,
+          kind: 'error',
+          status: 403,
+          error: 'Secure mode is required',
+          cacheStatus,
+          cacheHit: false,
+        };
+      }
+
       try {
         useAssetDeliveryV2 = await c.env.FLAGS.getBooleanValue('use-asset-delivery-v2', false);
       } catch (error) {
         logEvent(
           'warn',
           'asset.flag.evaluation_failed',
-          {
-            requestId,
-            assetId,
-            flag: 'use-asset-delivery-v2',
-            ...getErrorFields(error),
-          },
+          { requestId, assetId, flag: 'use-asset-delivery-v2', ...getErrorFields(error) },
           c.env,
         );
       }
 
-      const v2Request = useAssetDeliveryV2 ? buildRobloxV2Request(assetId, c.req.raw) : null;
+      const v2Request = useAssetDeliveryV2 ? buildRobloxV2Request(assetId, request) : null;
       const cacheKey = v2Request?.cacheKey ?? assetId;
+      let cachedValue: ArrayBuffer | null = null;
+      let cachedMetadata: CachedAssetMetadata | null = null;
 
       try {
-        /*
-         * KV automatically records this operation as a child of the
-         * asset.delivery span.
-         */
         const cached = await assetCache.getWithMetadata<CachedAssetMetadata>(cacheKey, 'arrayBuffer');
-
         cachedValue = cached.value;
         cachedMetadata = cached.metadata;
       } catch (error) {
-        c.set('cacheStatus', 'read-error');
-        span.setAttribute('cache.status', 'read-error');
-
-        logEvent(
-          'warn',
-          'asset.cache.read_failed',
-          {
-            requestId,
-            assetId,
-            ...getErrorFields(error),
-          },
-          c.env,
-        );
+        cacheStatus = 'read-error';
+        span.setAttribute('cache.status', cacheStatus);
+        logEvent('warn', 'asset.cache.read_failed', { requestId, assetId, ...getErrorFields(error) }, c.env);
       }
 
       if (cachedValue !== null) {
         try {
-          if (!cachedMetadata) {
-            throw new TypeError('Cached asset metadata is missing');
-          }
-
+          if (!cachedMetadata) throw new TypeError('Cached asset metadata is missing');
           if (cachedMetadata.kind !== 'asset' && cachedMetadata.kind !== 'not-found') {
             throw new TypeError('Cached asset kind is invalid');
           }
-
           if (typeof cachedMetadata.timestamp !== 'number' || !Number.isFinite(cachedMetadata.timestamp)) {
             throw new TypeError('Cached asset timestamp is invalid');
           }
 
           if (cachedMetadata.kind === 'not-found') {
-            c.set('cacheStatus', 'negative-hit');
-            span.setAttribute('cache.status', 'negative-hit');
-
-            return c.json(
-              {
-                error: 'Asset not found',
-                requestId,
-              },
-              404,
-              {
-                'X-Cache-Hit': 'true',
-                'X-Cache-Status': 'negative-hit',
-                'X-Cache-Timestamp': cachedMetadata.timestamp.toString(),
-              },
-            );
+            cacheStatus = 'negative-hit';
+            span.setAttribute('cache.status', cacheStatus);
+            return {
+              assetId,
+              kind: 'not-found',
+              status: 404,
+              error: 'Asset not found',
+              cacheStatus,
+              cacheHit: true,
+              timestamp: cachedMetadata.timestamp,
+            };
           }
 
           if (typeof cachedMetadata.contentType !== 'string' || cachedMetadata.contentType.length === 0) {
             throw new TypeError('Cached asset content type is invalid');
           }
+          if (cachedValue.byteLength === 0) throw new TypeError('Cached asset is empty');
 
-          if (cachedValue.byteLength === 0) {
-            throw new TypeError('Cached asset is empty');
-          }
-
-          /*
-           * getWithMetadata(..., "arrayBuffer") guarantees an
-           * ArrayBuffer, so this is compatible with Hono's body type.
-           */
-          const contentBytes: Uint8Array<ArrayBuffer> = new Uint8Array(cachedValue);
-
-          c.set('cacheStatus', 'hit');
-          span.setAttribute('cache.status', 'hit');
-          span.setAttribute('asset.bytes', contentBytes.byteLength);
-
-          return c.body(contentBytes, 200, {
-            'Content-Type': cachedMetadata.contentType,
-            ...(cachedMetadata.extension
-              ? {
-                  [ASSET_EXTENSION_HEADER]: cachedMetadata.extension,
-                }
-              : {}),
-            'X-Cache-Hit': 'true',
-            'X-Cache-Status': 'hit',
-            'X-Cache-Timestamp': cachedMetadata.timestamp.toString(),
-          });
+          const data: Uint8Array<ArrayBuffer> = new Uint8Array(cachedValue);
+          cacheStatus = 'hit';
+          span.setAttribute('cache.status', cacheStatus);
+          span.setAttribute('asset.bytes', data.byteLength);
+          return {
+            assetId,
+            kind: 'asset',
+            status: 200,
+            data,
+            contentType: cachedMetadata.contentType,
+            extension: cachedMetadata.extension,
+            cacheStatus,
+            cacheHit: true,
+            timestamp: cachedMetadata.timestamp,
+          };
         } catch (error) {
-          c.set('cacheStatus', 'corrupt');
-          span.setAttribute('cache.status', 'corrupt');
-
-          logEvent(
-            'warn',
-            'asset.cache.corrupt',
-            {
-              requestId,
-              assetId,
-              ...getErrorFields(error),
-            },
-            c.env,
-          );
-
-          /*
-           * A corrupt cache entry should not prevent delivery.
-           * Delete it and continue to Roblox.
-           */
+          cacheStatus = 'corrupt';
+          span.setAttribute('cache.status', cacheStatus);
+          logEvent('warn', 'asset.cache.corrupt', { requestId, assetId, ...getErrorFields(error) }, c.env);
           try {
             await assetCache.delete(cacheKey);
           } catch (deleteError) {
             logEvent(
               'warn',
               'asset.cache.delete_failed',
-              {
-                requestId,
-                assetId,
-                ...getErrorFields(deleteError),
-              },
+              { requestId, assetId, ...getErrorFields(deleteError) },
               c.env,
             );
           }
         }
-      } else if (c.get('cacheStatus') !== 'read-error') {
-        c.set('cacheStatus', 'miss');
-        span.setAttribute('cache.status', 'miss');
+      } else if (cacheStatus !== 'read-error') {
+        cacheStatus = 'miss';
+        span.setAttribute('cache.status', cacheStatus);
       }
 
       let robloxResponse: Response;
-
       try {
-        /*
-         * The outbound fetch is automatically recorded as a child of
-         * the asset.delivery span.
-         */
         const discoveryResponse = await fetch(v2Request?.url ?? buildRobloxV1Url(assetId), {
           ...(v2Request?.init ?? {}),
           signal: AbortSignal.timeout(ROBLOX_TIMEOUT_MS),
@@ -228,187 +179,274 @@ export async function handleAssetDelivery(c: Context<AppEnvironment, '/assets/:a
         } else {
           const discovery = await parseRobloxV2Discovery(discoveryResponse);
           assetTypeId = discovery.assetTypeId;
-          robloxResponse = await fetch(discovery.location, {
-            signal: AbortSignal.timeout(ROBLOX_TIMEOUT_MS),
-          });
+          robloxResponse = await fetch(discovery.location, { signal: AbortSignal.timeout(ROBLOX_TIMEOUT_MS) });
         }
       } catch (error) {
         if (error instanceof MalformedRobloxV2ResponseError) {
-          throw new HTTPException(502, {
-            message: error.message,
-            cause: error,
-          });
+          throw new HTTPException(502, { message: error.message, cause: error });
         }
         const timedOut = isTimeoutError(error);
-
         throw new HTTPException(timedOut ? 504 : 502, {
           message: timedOut ? 'Roblox asset delivery timed out' : 'Unable to reach Roblox asset delivery',
           cause: error,
         });
       }
 
-      c.set('upstreamStatus', robloxResponse.status);
-      span.setAttribute('http.response.status_code', robloxResponse.status);
-
+      const upstreamStatus = robloxResponse.status;
+      span.setAttribute('http.response.status_code', upstreamStatus);
       const contentType = robloxResponse.headers.get('Content-Type') ?? 'application/octet-stream';
 
       if (!robloxResponse.ok) {
         logEvent(
           'warn',
           'asset.upstream.rejected',
-          {
-            requestId,
-            assetId,
-            upstreamStatus: robloxResponse.status,
-            upstreamStatusText: robloxResponse.statusText,
-          },
+          { requestId, assetId, upstreamStatus, upstreamStatusText: robloxResponse.statusText },
           c.env,
         );
 
-        /*
-         * Cache only definitive not-found responses. Rate limits,
-         * timeouts, permission errors, and server failures must be
-         * retried normally.
-         */
-        if (robloxResponse.status === 404) {
+        if (upstreamStatus === 404) {
           const timestamp = Date.now();
           let negativeCacheStatus: CacheStatus = 'negative-write';
-
-          /*
-           * The upstream body is not needed because this endpoint
-           * returns a consistent local error response.
-           */
           try {
             await robloxResponse.body?.cancel();
           } catch {
             // Body cancellation failure does not affect the response.
           }
-
           try {
             await assetCache.put(cacheKey, new ArrayBuffer(0), {
               expirationTtl: NEGATIVE_CACHE_TTL_SECONDS,
-              metadata: {
-                kind: 'not-found',
-                timestamp,
-              } satisfies CachedAssetMetadata,
+              metadata: { kind: 'not-found', timestamp } satisfies CachedAssetMetadata,
             });
-
-            c.set('cacheStatus', 'negative-write');
-            span.setAttribute('cache.status', 'negative-write');
-
+            cacheStatus = 'negative-write';
+            span.setAttribute('cache.status', cacheStatus);
             logEvent(
               'info',
               'asset.cache.negative_written',
-              {
-                requestId,
-                assetId,
-                expirationTtl: NEGATIVE_CACHE_TTL_SECONDS,
-              },
+              { requestId, assetId, expirationTtl: NEGATIVE_CACHE_TTL_SECONDS },
               c.env,
             );
           } catch (error) {
             negativeCacheStatus = 'write-error';
-
-            c.set('cacheStatus', 'write-error');
-            span.setAttribute('cache.status', 'write-error');
-
+            cacheStatus = negativeCacheStatus;
+            span.setAttribute('cache.status', cacheStatus);
             logEvent(
               'warn',
               'asset.cache.negative_write_failed',
-              {
-                requestId,
-                assetId,
-                ...getErrorFields(error),
-              },
+              { requestId, assetId, ...getErrorFields(error) },
               c.env,
             );
           }
-
-          return c.json(
-            {
-              error: 'Asset not found',
-              requestId,
-            },
-            404,
-            {
-              'X-Cache-Hit': 'false',
-              'X-Cache-Status': negativeCacheStatus,
-              'X-Cache-Timestamp': timestamp.toString(),
-            },
-          );
+          return {
+            assetId,
+            kind: 'not-found',
+            status: 404,
+            error: 'Asset not found',
+            cacheStatus: negativeCacheStatus,
+            cacheHit: false,
+            timestamp,
+            upstreamStatus,
+          };
         }
 
-        /*
-         * Forward other upstream errors without assuming that Roblox
-         * returned JSON. These responses are not cached.
-         */
         const errorBuffer = await robloxResponse.arrayBuffer();
-        const errorBody: Uint8Array<ArrayBuffer> = new Uint8Array(errorBuffer);
-
-        return c.body(errorBody, robloxResponse.status as ContentfulStatusCode, {
-          'Content-Type': contentType,
-          'X-Cache-Hit': 'false',
-          'X-Cache-Status': 'bypass',
-        });
+        return {
+          assetId,
+          kind: 'error',
+          status: upstreamStatus,
+          error: robloxResponse.statusText || 'Roblox asset delivery failed',
+          data: new Uint8Array(errorBuffer),
+          contentType,
+          cacheStatus: 'bypass',
+          cacheHit: false,
+          upstreamStatus,
+        };
       }
 
       const resolvedExtension = await resolveAssetExtension(contentType, robloxResponse.body, assetTypeId);
-      assetExtension ??= resolvedExtension.extension;
+      assetExtension = resolvedExtension.extension;
       const robloxBuffer = await new Response(resolvedExtension.body).arrayBuffer();
-      const robloxData: Uint8Array<ArrayBuffer> = new Uint8Array(robloxBuffer);
-
-      if (robloxData.byteLength === 0) {
-        throw new HTTPException(502, {
-          message: 'Roblox returned an empty asset',
-        });
-      }
-
-      span.setAttribute('asset.bytes', robloxData.byteLength);
+      const data: Uint8Array<ArrayBuffer> = new Uint8Array(robloxBuffer);
+      if (data.byteLength === 0) throw new HTTPException(502, { message: 'Roblox returned an empty asset' });
+      span.setAttribute('asset.bytes', data.byteLength);
 
       const timestamp = Date.now();
-
       try {
-        /*
-         * Store asset bytes directly as the KV value and keep small,
-         * JSON-serializable fields in KV metadata.
-         */
         await assetCache.put(cacheKey, robloxBuffer, {
-          metadata: {
-            kind: 'asset',
-            timestamp,
-            contentType,
-            extension: assetExtension,
-          } satisfies CachedAssetMetadata,
+          metadata: { kind: 'asset', timestamp, contentType, extension: assetExtension } satisfies CachedAssetMetadata,
         });
       } catch (error) {
-        /*
-         * Cache degradation should not prevent a successfully fetched
-         * Roblox asset from being delivered.
-         */
-        c.set('cacheStatus', 'write-error');
-        span.setAttribute('cache.status', 'write-error');
-
+        cacheStatus = 'write-error';
+        span.setAttribute('cache.status', cacheStatus);
         logEvent(
           'warn',
           'asset.cache.write_failed',
-          {
-            requestId,
-            assetId,
-            assetBytes: robloxData.byteLength,
-            ...getErrorFields(error),
-          },
+          { requestId, assetId, assetBytes: data.byteLength, ...getErrorFields(error) },
           c.env,
         );
       }
 
-      return c.body(robloxData, 200, {
-        'Content-Type': contentType,
-        ...(assetExtension ? { [ASSET_EXTENSION_HEADER]: assetExtension } : {}),
-        'X-Cache-Hit': 'false',
-        'X-Cache-Status': c.get('cacheStatus'),
-        'X-Cache-Timestamp': timestamp.toString(),
-      });
+      return {
+        assetId,
+        kind: 'asset',
+        status: 200,
+        data,
+        contentType,
+        extension: assetExtension,
+        cacheStatus,
+        cacheHit: false,
+        timestamp,
+        upstreamStatus,
+      };
     },
     c.env,
   );
+}
+
+function resultToResponse(c: AssetContext, result: AssetDeliveryResult): Response {
+  c.set('cacheStatus', result.cacheStatus);
+  if (result.upstreamStatus !== undefined) c.set('upstreamStatus', result.upstreamStatus);
+
+  if (result.kind === 'asset') {
+    return c.body(result.data, 200, {
+      'Content-Type': result.contentType,
+      ...(result.extension ? { [ASSET_EXTENSION_HEADER]: result.extension } : {}),
+      'X-Cache-Hit': result.cacheHit ? 'true' : 'false',
+      'X-Cache-Status': result.cacheStatus,
+      ...(result.timestamp !== undefined ? { 'X-Cache-Timestamp': result.timestamp.toString() } : {}),
+    });
+  }
+
+  if (result.kind === 'not-found') {
+    return c.json({ error: result.error, requestId: c.get('requestId') }, 404, {
+      'X-Cache-Hit': result.cacheHit ? 'true' : 'false',
+      'X-Cache-Status': result.cacheStatus,
+      ...(result.timestamp !== undefined ? { 'X-Cache-Timestamp': result.timestamp.toString() } : {}),
+    });
+  }
+
+  if (result.status === 403) {
+    return c.json({ error: result.error, requestId: c.get('requestId') }, 403);
+  }
+
+  return c.body(result.data ?? new Uint8Array(), result.status as ContentfulStatusCode, {
+    ...(result.contentType ? { 'Content-Type': result.contentType } : {}),
+    'X-Cache-Hit': 'false',
+    'X-Cache-Status': result.cacheStatus,
+  });
+}
+
+export async function handleAssetDelivery(c: AssetContext) {
+  const result = await fetchAsset(c.req.param('assetId') ?? '', c, c.req.raw);
+  return resultToResponse(c, result);
+}
+
+const MAX_BATCH_ASSETS = 25;
+const MAX_BATCH_CONCURRENCY = 6;
+
+type BatchBody = { assetIds: unknown };
+
+export async function handleAssetBatchRequest(c: Context<AppEnvironment>) {
+  const requestId = c.get('requestId');
+
+  if (c.req.header('X-Rayfield-Secure-Mode') !== 'true') {
+    c.set('cacheStatus', 'bypass');
+    return c.json({ error: 'Secure mode is required', requestId }, 403);
+  }
+
+  let body: BatchBody;
+  try {
+    body = await c.req.json<BatchBody>();
+  } catch {
+    return c.json({ error: 'Request body must be valid JSON', requestId }, 400);
+  }
+
+  if (!body || typeof body !== 'object' || !Array.isArray(body.assetIds)) {
+    return c.json({ error: 'assetIds must be a non-empty array', requestId }, 400);
+  }
+
+  if (body.assetIds.length === 0) {
+    return c.json({ error: 'assetIds must be a non-empty array', requestId }, 400);
+  }
+  if (body.assetIds.length > MAX_BATCH_ASSETS) {
+    return c.json({ error: `A maximum of ${MAX_BATCH_ASSETS} asset IDs is allowed`, requestId }, 400);
+  }
+  if (!body.assetIds.every(isValidAssetId)) {
+    return c.json({ error: 'Invalid Roblox asset ID', requestId }, 400);
+  }
+
+  const assetIds = body.assetIds.filter((assetId): assetId is string => isValidAssetId(assetId));
+  const inFlight = new Map<string, Promise<AssetDeliveryResult>>();
+  const results = await mapWithConcurrency(assetIds, MAX_BATCH_CONCURRENCY, async (assetId) => {
+    let operation = inFlight.get(assetId);
+    if (!operation) {
+      operation = fetchAsset(assetId, c as AssetContext, c.req.raw).catch((error: unknown) => {
+        const status = error instanceof HTTPException ? error.status : 500;
+        const message = error instanceof HTTPException ? error.message : 'Internal server error';
+        return {
+          assetId,
+          kind: 'error',
+          status,
+          error: message,
+          cacheStatus: 'bypass',
+          cacheHit: false,
+        } satisfies AssetDeliveryResult;
+      });
+      inFlight.set(assetId, operation);
+    }
+    return assetResultToBatchItem(await operation);
+  });
+
+  c.set('cacheStatus', 'unknown');
+  return c.json({ requestId, results }, 200);
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, callback: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await callback(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+export function isValidAssetId(assetId: unknown): assetId is string {
+  return typeof assetId === 'string' && ASSET_ID_PATTERN.test(assetId);
+}
+
+export function assetResultToBatchItem(result: AssetDeliveryResult) {
+  if (result.kind === 'asset') {
+    return {
+      assetId: result.assetId,
+      status: result.status,
+      contentType: result.contentType,
+      ...(result.extension ? { extension: result.extension } : {}),
+      cacheStatus: result.cacheStatus,
+      cacheHit: result.cacheHit,
+      dataBase64: bytesToBase64(result.data),
+    };
+  }
+
+  return {
+    assetId: result.assetId,
+    status: result.status,
+    cacheStatus: result.cacheStatus,
+    cacheHit: result.cacheHit,
+    error: result.error,
+  };
+}
+
+function bytesToBase64(data: Uint8Array<ArrayBuffer>): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < data.length; offset += chunkSize) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }

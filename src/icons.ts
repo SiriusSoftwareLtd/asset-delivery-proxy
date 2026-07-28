@@ -350,7 +350,7 @@ async function getIconContent(iconConfig: IconConfig, reportLevel: string): Prom
     async (span) => {
       span.setAttribute('icon.provider', iconConfig.iconType);
 
-			const url = getIconUrl(iconConfig);
+      const url = getIconUrl(iconConfig);
 
       try {
         const response = await fetch(url, {

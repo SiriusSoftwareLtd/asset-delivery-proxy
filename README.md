@@ -5,7 +5,9 @@ A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. I
 ## Features
 
 - Serves Roblox assets from `GET /assets/:assetId`.
+- Serves ordered batches of Roblox assets from `POST /assets/batch`.
 - Serves rendered provider icons from `GET /icons/:iconPack/:iconName`.
+- Serves ordered batches of rendered provider icons from `POST /icon/batch`.
 - Rejects malformed asset IDs and requests that do not opt into secure mode.
 - Supports Roblox Asset Delivery v1 and an opt-in v2 path controlled by Cloudflare Flagship.
 - Caches assets and cache metadata in Workers KV; 404 responses are negatively cached for five minutes.
@@ -47,6 +49,22 @@ Successful responses include the asset bytes and these useful headers:
 | `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or fetched response. |
 | `X-Asset-Extension` | Detected asset filename extension, when known. |
 
+### Batch assets
+
+```http
+POST /assets/batch
+X-Rayfield-Secure-Mode: true
+Content-Type: application/json
+```
+
+The JSON body must contain between 1 and 25 decimal asset IDs (each up to 20 digits):
+
+```json
+{ "assetIds": ["101", "202"] }
+```
+
+A valid batch returns `200` and preserves input order. Each successful item contains the asset bytes as base64 in `dataBase64`, along with `contentType`, an optional `extension`, `cacheStatus`, and `cacheHit`. Failed items contain their individual HTTP `status`, `cacheStatus`, `cacheHit`, and `error`; one item failing does not fail the whole batch. Malformed JSON, an invalid body, an empty or over-25 list, or an invalid asset ID returns `400`. Missing secure mode returns `403` before processing items. Batch processing allows at most six active asset operations at once.
+
 ### Icons
 
 ```http
@@ -60,6 +78,26 @@ Pack-specific options are `category` for Remix icons, `style` (`brands`, `regula
 Successful icon responses are PNG bytes and include `Content-Type: image/png`, `Cache-Control`, `X-Request-ID`, `X-Icon-Pack`, and the `X-Cache-*` headers. Invalid requests and unsupported packs return `400`; missing icons return `404`; upstream timeouts return `504`; other generation failures return `502`.
 
 Errors use a JSON body containing `error` and `requestId` fields. Upstream errors other than 404 are passed through with their original status and content type.
+
+### Batch icons
+
+```http
+POST /icon/batch
+Content-Type: application/json
+```
+
+The JSON body must contain between 1 and 50 icon requests. Each item has an `iconPack`, `iconName`, and an `options` object whose values are strings:
+
+```json
+{
+  "icons": [
+    { "iconPack": "lucide", "iconName": "circle-check", "options": { "size": "64" } },
+    { "iconPack": "hero", "iconName": "academic-cap", "options": { "sourceSize": "20", "style": "solid", "size": "128" } }
+  ]
+}
+```
+
+The supported options are `size`, Remix `category`, Font Awesome `style` (`brands`, `regular`, or `solid`), and Heroicons `sourceSize` (`16`, `20`, or `24`) plus `style` (`outline` or `solid`). The same provider validation and defaults as the single-icon route apply. A valid batch returns `200`, preserves input order, and returns successful PNGs as base64 in `dataBase64`, with `contentType`, `cacheStatus`, and `cacheHit`. Individual failures return their own `status` and `error`; malformed JSON, malformed body/item structure, an empty list, or more than 50 items returns outer `400`. Batch processing allows at most six active icon operations at once.
 
 ## Configuration and deployment
 

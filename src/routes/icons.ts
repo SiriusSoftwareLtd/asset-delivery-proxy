@@ -1,10 +1,9 @@
 import type { Context } from 'hono';
 import type { BlankInput } from 'hono/types';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { parseIconConfig } from '../iconPacks';
 import { getPngFromSvgIcon, IconError } from '../icons';
 import { enterTraceSpan, getErrorFields, logEvent } from '../observability';
-import type { AppEnvironment } from '../types';
+import type { AppEnvironment, CacheStatus } from '../types';
 
 const ICON_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
@@ -23,7 +22,7 @@ function iconCacheKey(iconPack: string, normalizedOptions: string, iconName: str
   return `icon:v1:${encodeURIComponent(iconPack)}:${encodeURIComponent(normalizedOptions)}:${encodeURIComponent(iconName)}`;
 }
 
-function errorStatus(error: IconError): ContentfulStatusCode {
+function errorStatus(error: IconError): 400 | 404 | 502 | 504 {
   if (error.code === 'ICON_NOT_FOUND') return 404;
   if (error.code === 'UPSTREAM_TIMEOUT') return 504;
   if (error.stage === 'validation') return 400;
@@ -37,48 +36,75 @@ function errorMessage(error: IconError): string {
   return 'Unable to generate icon';
 }
 
-export async function handleIconRequest(c: Context<AppEnvironment, '/icons/:iconPack/:iconName', BlankInput>) {
+export type IconDeliveryResult =
+  | {
+      iconPack: string;
+      iconName: string;
+      kind: 'icon';
+      status: 200;
+      data: Uint8Array<ArrayBuffer>;
+      contentType: 'image/png';
+      cacheStatus: CacheStatus;
+      cacheHit: boolean;
+      timestamp: number;
+    }
+  | {
+      iconPack: string;
+      iconName: string;
+      kind: 'error';
+      status: 400 | 404 | 502 | 504;
+      error: string;
+    };
+
+type IconContext = Context<AppEnvironment, string, BlankInput>;
+
+export async function fetchIcon(
+  iconPack: string,
+  iconName: string,
+  query: URLSearchParams,
+  c: IconContext,
+): Promise<IconDeliveryResult> {
   return enterTraceSpan(
     'icon.delivery',
     async (span) => {
       const requestId = c.get('requestId');
-      const iconPack = c.req.param('iconPack');
-      const iconName = c.req.param('iconName');
-      const query = new URL(c.req.url).searchParams;
       let parsed: ReturnType<typeof parseIconConfig>;
 
       try {
         parsed = parseIconConfig(iconPack, iconName, query);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Invalid icon request';
-        return c.json({ error: message, requestId }, 400);
+        return { iconPack, iconName, kind: 'error', status: 400, error: message };
       }
 
-      c.header('X-Icon-Pack', iconPack);
       span.setAttribute('icon.provider', iconPack);
 
       const cacheKey = iconCacheKey(iconPack, parsed.normalizedOptions, iconName);
       let cached: { value: ArrayBuffer | null; metadata: CachedIconMetadata | null } | undefined;
+      let cacheStatus: CacheStatus = 'unknown';
 
       try {
         cached = await c.env.assetCache.getWithMetadata<CachedIconMetadata>(cacheKey, 'arrayBuffer');
       } catch (error) {
-        c.set('cacheStatus', 'read-error');
+        cacheStatus = 'read-error';
         logEvent('warn', 'icon.cache.read_failed', { requestId, ...getErrorFields(error) }, c.env);
       }
 
       if (cached?.value !== null && cached?.value !== undefined && cached.metadata?.kind === 'icon') {
-        c.set('cacheStatus', 'hit');
-        return c.body(new Uint8Array(cached.value), 200, {
-          'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=86400, stale-while-revalidate=300',
-          'X-Cache-Hit': 'true',
-          'X-Cache-Status': 'hit',
-          'X-Cache-Timestamp': String(cached.metadata.timestamp),
-        });
+        return {
+          iconPack,
+          iconName,
+          kind: 'icon',
+          status: 200,
+          data: new Uint8Array(cached.value),
+          contentType: 'image/png',
+          cacheStatus: 'hit',
+          cacheHit: true,
+          timestamp: cached.metadata.timestamp,
+        };
       }
 
-      if (c.get('cacheStatus') === 'unknown') c.set('cacheStatus', 'miss');
+      if (cacheStatus === 'unknown') cacheStatus = 'miss';
 
       try {
         const png = asArrayBufferBytes(
@@ -92,17 +118,21 @@ export async function handleIconRequest(c: Context<AppEnvironment, '/icons/:icon
             metadata: { kind: 'icon', timestamp } satisfies CachedIconMetadata,
           });
         } catch (error) {
-          c.set('cacheStatus', 'write-error');
+          cacheStatus = 'write-error';
           logEvent('warn', 'icon.cache.write_failed', { requestId, ...getErrorFields(error) }, c.env);
         }
 
-        return c.body(png, 200, {
-          'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=86400, stale-while-revalidate=300',
-          'X-Cache-Hit': 'false',
-          'X-Cache-Status': c.get('cacheStatus'),
-          'X-Cache-Timestamp': String(timestamp),
-        });
+        return {
+          iconPack,
+          iconName,
+          kind: 'icon',
+          status: 200,
+          data: png,
+          contentType: 'image/png',
+          cacheStatus,
+          cacheHit: false,
+          timestamp,
+        };
       } catch (error) {
         const iconError =
           error instanceof IconError
@@ -113,7 +143,7 @@ export async function handleIconRequest(c: Context<AppEnvironment, '/icons/:icon
                 cause: error,
               });
 
-        c.set('upstreamStatus', iconError.upstreamStatus);
+        if (iconError.upstreamStatus !== undefined) c.set('upstreamStatus', iconError.upstreamStatus);
         logEvent(
           'warn',
           'icon.delivery.failed',
@@ -121,9 +151,135 @@ export async function handleIconRequest(c: Context<AppEnvironment, '/icons/:icon
           c.env,
         );
 
-        return c.json({ error: errorMessage(iconError), requestId }, errorStatus(iconError));
+        return {
+          iconPack,
+          iconName,
+          kind: 'error',
+          status: errorStatus(iconError),
+          error: errorMessage(iconError),
+        };
       }
     },
     c.env,
   );
+}
+
+export async function handleIconRequest(c: Context<AppEnvironment, '/icons/:iconPack/:iconName', BlankInput>) {
+  const iconPack = c.req.param('iconPack');
+  const iconName = c.req.param('iconName');
+  const result = await fetchIcon(iconPack, iconName, new URL(c.req.url).searchParams, c);
+
+  c.header('X-Icon-Pack', iconPack);
+  c.set('cacheStatus', result.kind === 'icon' ? result.cacheStatus : 'unknown');
+
+  if (result.kind === 'icon') {
+    return c.body(result.data, 200, {
+      'Content-Type': result.contentType,
+      'Cache-Control': 'public, max-age=86400, stale-while-revalidate=300',
+      'X-Cache-Hit': result.cacheHit ? 'true' : 'false',
+      'X-Cache-Status': result.cacheStatus,
+      'X-Cache-Timestamp': String(result.timestamp),
+    });
+  }
+
+  return c.json({ error: result.error, requestId: c.get('requestId') }, result.status);
+}
+
+const MAX_BATCH_ICONS = 50;
+const MAX_BATCH_CONCURRENCY = 6;
+
+type IconBatchItem = {
+  iconPack: string;
+  iconName: string;
+  options: Record<string, string>;
+};
+
+type IconBatchBody = { icons: unknown };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isValidBatchItem(value: unknown): value is IconBatchItem {
+  if (!isRecord(value) || typeof value.iconPack !== 'string' || typeof value.iconName !== 'string') return false;
+  if (!isRecord(value.options)) return false;
+  if (!Object.values(value.options).every((option) => typeof option === 'string')) return false;
+  return true;
+}
+
+function iconResultToBatchItem(result: IconDeliveryResult) {
+  if (result.kind === 'icon') {
+    return {
+      iconPack: result.iconPack,
+      iconName: result.iconName,
+      status: result.status,
+      contentType: result.contentType,
+      cacheStatus: result.cacheStatus,
+      cacheHit: result.cacheHit,
+      dataBase64: bytesToBase64(result.data),
+    };
+  }
+
+  return {
+    iconPack: result.iconPack,
+    iconName: result.iconName,
+    status: result.status,
+    error: result.error,
+  };
+}
+
+export async function handleIconBatchRequest(c: Context<AppEnvironment>) {
+  const requestId = c.get('requestId');
+  let body: IconBatchBody;
+
+  try {
+    body = await c.req.json<IconBatchBody>();
+  } catch {
+    return c.json({ error: 'Request body must be valid JSON', requestId }, 400);
+  }
+
+  if (!isRecord(body) || !Array.isArray(body.icons)) {
+    return c.json({ error: 'icons must be a non-empty array', requestId }, 400);
+  }
+  if (body.icons.length === 0) return c.json({ error: 'icons must be a non-empty array', requestId }, 400);
+  if (body.icons.length > MAX_BATCH_ICONS) {
+    return c.json({ error: `A maximum of ${MAX_BATCH_ICONS} icons is allowed`, requestId }, 400);
+  }
+  if (!body.icons.every(isValidBatchItem)) {
+    return c.json({ error: 'Each icon must include string iconPack, iconName, and options fields', requestId }, 400);
+  }
+
+  const results = await mapWithConcurrency(body.icons, MAX_BATCH_CONCURRENCY, async (item) => {
+    const options = new URLSearchParams(Object.entries(item.options));
+    const result = await fetchIcon(item.iconPack, item.iconName, options, c);
+    return iconResultToBatchItem(result);
+  });
+
+  c.set('cacheStatus', 'unknown');
+  return c.json({ requestId, results }, 200);
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, callback: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await callback(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+function bytesToBase64(data: Uint8Array<ArrayBuffer>): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < data.length; offset += chunkSize) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
