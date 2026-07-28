@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import worker from '../src';
-import { parseReportLevel, shouldReport } from '../src/observability';
+import { parseReportLevel, shouldReport } from '../src/middleware/observability';
+import worker from './worker';
 
 function createEnv(reportLevel?: string): CloudflareBindings {
   return {
@@ -49,9 +49,9 @@ describe('observability report levels', () => {
   });
 
   test('default env emits no custom observability logs', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(new Uint8Array([1]), { headers: { 'Content-Type': 'image/png' } }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([1]), { headers: { 'Content-Type': 'image/png' } }));
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     const response = await worker.fetch(request('101', { 'X-Rayfield-Secure-Mode': 'true' }), createEnv());
 
@@ -62,9 +62,9 @@ describe('observability report levels', () => {
   });
 
   test('info emits request.completed', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(new Uint8Array([1]), { headers: { 'Content-Type': 'image/png' } }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([1]), { headers: { 'Content-Type': 'image/png' } }));
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
 
     await worker.fetch(request('102', { 'X-Rayfield-Secure-Mode': 'true' }), createEnv('info'));

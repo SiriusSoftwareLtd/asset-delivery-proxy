@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import worker from '../src';
+import worker from './worker';
 
 function createCache() {
   const values = new Map<string, { value: ArrayBuffer; metadata?: unknown }>();
@@ -44,7 +44,9 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d
 describe('icon delivery', () => {
   test('renders a Lucide icon with PNG and cache headers without secure mode', async () => {
     const cache = createCache();
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(svg, { headers: { 'Content-Type': 'image/svg+xml' } }));
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(svg, { headers: { 'Content-Type': 'image/svg+xml' } }));
 
     const response = await worker.fetch(request('/icons/lucide/circle-check'), createTestEnv(cache));
 
@@ -68,12 +70,15 @@ describe('icon delivery', () => {
   ])('rejects invalid request %s', async (path, message) => {
     const response = await worker.fetch(request(path), createTestEnv());
     expect(response.status).toBe(400);
-    expect((await response.json()).error).toContain(message);
+    expect((await response.json<{ error: string }>()).error).toContain(message);
   });
 
   test.each([
     ['/icons/font-awesome/circle?style=brands', '/FortAwesome/Font-Awesome/7.x/svgs/brands/circle.svg'],
-    ['/icons/hero/academic-cap?sourceSize=20&style=solid', '/tailwindlabs/heroicons/master/optimized/20/solid/academic-cap.svg'],
+    [
+      '/icons/hero/academic-cap?sourceSize=20&style=solid',
+      '/tailwindlabs/heroicons/master/optimized/20/solid/academic-cap.svg',
+    ],
     ['/icons/remix/home?category=Buildings', '/Remix-Design/RemixIcon/master/icons/Buildings/home.svg'],
   ])('maps provider variant %s', async (path, expectedPath) => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(svg));
@@ -96,7 +101,7 @@ describe('icon delivery', () => {
 
     const response = await worker.fetch(request('/icons/lucide/check'), createTestEnv());
     expect(response.status).toBe(expectedStatus);
-    expect((await response.json()).requestId).toBeTruthy();
+    expect((await response.json<{ requestId: string }>()).requestId).toBeTruthy();
     vi.restoreAllMocks();
   });
 
@@ -117,11 +122,29 @@ describe('icon delivery', () => {
     expect(body.requestId).toBeTruthy();
     expect(body.results).toHaveLength(2);
     expect(body.results).toEqual([
-      expect.objectContaining({ iconPack: 'lucide', iconName: 'circle-check', status: 200, contentType: 'image/png', cacheStatus: 'miss', cacheHit: false }),
-      expect.objectContaining({ iconPack: 'hero', iconName: 'academic-cap', status: 200, contentType: 'image/png', cacheStatus: 'miss', cacheHit: false }),
+      expect.objectContaining({
+        iconPack: 'lucide',
+        iconName: 'circle-check',
+        status: 200,
+        contentType: 'image/png',
+        cacheStatus: 'miss',
+        cacheHit: false,
+      }),
+      expect.objectContaining({
+        iconPack: 'hero',
+        iconName: 'academic-cap',
+        status: 200,
+        contentType: 'image/png',
+        cacheStatus: 'miss',
+        cacheHit: false,
+      }),
     ]);
-    expect(body.results.every((result) => typeof result.dataBase64 === 'string' && (result.dataBase64 as string).length > 0)).toBe(true);
-    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/tailwindlabs/heroicons/master/optimized/20/solid/academic-cap.svg');
+    expect(
+      body.results.every((result) => typeof result.dataBase64 === 'string' && (result.dataBase64 as string).length > 0),
+    ).toBe(true);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      '/tailwindlabs/heroicons/master/optimized/20/solid/academic-cap.svg',
+    );
     fetchMock.mockRestore();
   });
 
@@ -138,9 +161,7 @@ describe('icon delivery', () => {
     const body = (await response.json()) as { results: Array<Record<string, unknown>> };
 
     expect(response.status).toBe(200);
-    expect(body.results).toEqual([
-      expect.objectContaining({ status: 200, cacheStatus: 'hit', cacheHit: true }),
-    ]);
+    expect(body.results).toEqual([expect.objectContaining({ status: 200, cacheStatus: 'hit', cacheHit: true })]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });

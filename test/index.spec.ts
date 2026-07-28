@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import worker from '../src';
+import worker from './worker';
 
 type StoredValue = {
   value: ArrayBuffer;
@@ -189,9 +189,30 @@ describe('asset delivery rollout', () => {
     expect(response.status).toBe(200);
     expect(body.requestId).toBeTruthy();
     expect(body.results).toEqual([
-      expect.objectContaining({ assetId: '101', status: 200, contentType: 'image/png', extension: '.png', cacheStatus: 'hit', cacheHit: true, dataBase64: 'AQI=' }),
-      expect.objectContaining({ assetId: '202', status: 200, contentType: 'image/jpeg', cacheStatus: 'miss', cacheHit: false, dataBase64: 'AwQ=' }),
-      expect.objectContaining({ assetId: '303', status: 404, cacheStatus: 'negative-write', cacheHit: false, error: 'Asset not found' }),
+      expect.objectContaining({
+        assetId: '101',
+        status: 200,
+        contentType: 'image/png',
+        extension: '.png',
+        cacheStatus: 'hit',
+        cacheHit: true,
+        dataBase64: 'AQI=',
+      }),
+      expect.objectContaining({
+        assetId: '202',
+        status: 200,
+        contentType: 'image/jpeg',
+        cacheStatus: 'miss',
+        cacheHit: false,
+        dataBase64: 'AwQ=',
+      }),
+      expect.objectContaining({
+        assetId: '303',
+        status: 404,
+        cacheStatus: 'negative-write',
+        cacheHit: false,
+        error: 'Asset not found',
+      }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     fetchMock.mockRestore();
@@ -215,15 +236,18 @@ describe('asset delivery rollout', () => {
       expect(response.status).toBe(400);
     }
 
-    const denied = await worker.fetch(batchRequest({ assetIds: ['101'] }, { 'X-Rayfield-Secure-Mode': 'false' }), createTestEnv(false));
+    const denied = await worker.fetch(
+      batchRequest({ assetIds: ['101'] }, { 'X-Rayfield-Secure-Mode': 'false' }),
+      createTestEnv(false),
+    );
     expect(denied.status).toBe(403);
   });
 
   test('batch duplicate IDs preserve order and share the in-flight cacheable operation', async () => {
     const cache = createCache();
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(new Uint8Array([9]), { headers: { 'Content-Type': 'image/png' } }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([9]), { headers: { 'Content-Type': 'image/png' } }));
 
     const response = await worker.fetch(batchRequest({ assetIds: ['404', '404', '505'] }), createTestEnv(false, cache));
     const body = (await response.json()) as { results: Array<Record<string, unknown>> };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { extensionFromContentType, extensionFromPrefix, resolveAssetExtension } from '../src/assetExtension';
+import { extensionFromContentType, extensionFromPrefix, resolveAssetExtension } from '../src/services/assets/extension';
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 
