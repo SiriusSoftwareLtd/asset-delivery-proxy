@@ -7,18 +7,12 @@
 	"name": "asset-delivery-proxy",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-27",
-	"observability": {
-		"enabled": true
-	},
-	"upload_source_maps": true,
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
+	"compatibility_flags": ["nodejs_compat"],
 	"kv_namespaces": [
 		{
 			"binding": "assetCache",
-			"id": "45592b2aefe14f9db19167adda87cbda"
-		}
+			"id": "45592b2aefe14f9db19167adda87cbda",
+		},
 	],
 	"ratelimits": [
 		{
@@ -26,8 +20,32 @@
 			"namespace_id": "2000",
 			"simple": {
 				"limit": 100,
-				"period": 60
-			}
+				"period": 60,
+			},
+		},
+	],
+	"rules": [
+		{
+			"type": "CompiledWasm",
+			"globs": ["**/*.wasm"],
+			"fallthrough": true,
+		},
+	],
+	"observability": {
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1
+		},
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 0.05
+		}
+	},
+	"upload_source_maps": true,
+	"flagship": [
+		{
+			"binding": "FLAGS",
+			"app_id": "5204f93d-416a-4374-aefa-a6227b8876f1"
 		}
 	]
 	/**
