@@ -20,6 +20,10 @@ app.use('*', async (c, next) => {
   return rateLimiter(c, next);
 });
 
+app.get('/health', (c) => c.text('OK', 200));
+
+app.all("/", (c) => c.redirect("https://docs.sirius.menu/rayfield-gen2", 302));
+
 registerRoutes(app);
 
 /**
