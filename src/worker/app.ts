@@ -22,7 +22,7 @@ app.use('*', async (c, next) => {
 
 app.get('/health', (c) => c.text('OK', 200));
 
-app.all("/", (c) => c.redirect("https://docs.sirius.menu/rayfield-gen2", 302));
+app.all('/', (c) => c.redirect('https://docs.sirius.menu/rayfield-gen2', 302));
 
 registerRoutes(app);
 
