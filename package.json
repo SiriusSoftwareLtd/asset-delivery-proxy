@@ -27,5 +27,5 @@
 		"@resvg/resvg-wasm": "^2.6.2",
 		"hono": "^4.12.32"
 	},
-	"packageManager": "pnpm@11.17.0"
+	"packageManager": "pnpm@11.18.0"
 }
