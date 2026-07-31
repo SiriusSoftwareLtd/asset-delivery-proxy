@@ -180,7 +180,7 @@ describe('asset delivery rollout', () => {
     fetchMock.mockRestore();
   });
 
-  test('omits the cookie header when no session is configured', async () => {
+  test('omits the api key header when no session is configured', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/anon' }] }))
