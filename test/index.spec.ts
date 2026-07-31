@@ -190,7 +190,7 @@ describe('asset delivery rollout', () => {
     await worker.fetch(request('808'), testEnv);
 
     const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(new Headers(discoveryRequest.headers).has('Cookie')).toBe(false);
+    expect(new Headers(discoveryRequest.headers).has('x-api-key')).toBe(false);
     fetchMock.mockRestore();
   });
 
