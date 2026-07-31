@@ -3,52 +3,55 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "gen2-asset-delivery-proxy",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-03-10",
-  "compatibility_flags": ["nodejs_compat"],
-  "kv_namespaces": [
-    {
-      "binding": "assetCache",
-      "id": "45592b2aefe14f9db19167adda87cbda"
-    }
-  ],
-  "ratelimits": [
-    {
-      "name": "ASSET_PROXY_RATE_LIMITER",
-      "namespace_id": "2000",
-      "simple": {
-        "limit": 100,
-        "period": 60
-      }
-    }
-  ],
-  "rules": [
-    {
-      "type": "CompiledWasm",
-      "globs": ["**/*.wasm"],
-      "fallthrough": true
-    }
-  ],
-  "observability": {
-    "logs": {
-      "enabled": true,
-      "head_sampling_rate": 1
-    },
-    "traces": {
-      "enabled": true,
-      "head_sampling_rate": 0.05
-    }
-  },
-  "vars": {
-    "OBSERVABILITY_REPORT_LEVEL": "off"
-  },
-  "upload_source_maps": true,
-  "flagship": [
-    {
-      "binding": "FLAGS",
-      "app_id": "5204f93d-416a-4374-aefa-a6227b8876f1"
-    }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "gen2-asset-delivery-proxy",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-03-10",
+	"compatibility_flags": ["nodejs_compat"],
+	"kv_namespaces": [
+		{
+			"binding": "assetCache",
+			"id": "45592b2aefe14f9db19167adda87cbda",
+		},
+	],
+	"ratelimits": [
+		{
+			"name": "ASSET_PROXY_RATE_LIMITER",
+			"namespace_id": "2000",
+			"simple": {
+				"limit": 100,
+				"period": 60,
+			},
+		},
+	],
+	"rules": [
+		{
+			"type": "CompiledWasm",
+			"globs": ["**/*.wasm"],
+			"fallthrough": true,
+		},
+	],
+	"observability": {
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+		},
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 0.05,
+		},
+	},
+	"vars": {
+		"OBSERVABILITY_REPORT_LEVEL": "off",
+	},
+	"secrets": {
+		"required": ["RBLX_COOKIE"],
+	},
+	"upload_source_maps": true,
+	"flagship": [
+		{
+			"binding": "FLAGS",
+			"app_id": "5204f93d-416a-4374-aefa-a6227b8876f1",
+		},
+	],
 }
