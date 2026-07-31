@@ -164,11 +164,11 @@ export async function fetchAsset(assetId: string, c: AppContext, request: Reques
       let robloxResponse: Response;
       try {
         const discoveryResponse = await fetch(v2Request?.url ?? buildRobloxV1Url(assetId), {
-					...(v2Request?.init ?? {}),
-					headers: {
-						...(v2Request?.init?.headers ?? {}),
-						Cookie: `.ROBLOSECURITY=${c.env.RBLX_COOKIE};`
-					},
+          ...(v2Request?.init ?? {}),
+          headers: {
+            ...(v2Request?.init?.headers ?? {}),
+            Cookie: `.ROBLOSECURITY=${c.env.RBLX_COOKIE};`,
+          },
           signal: AbortSignal.timeout(ROBLOX_TIMEOUT_MS),
         });
 
