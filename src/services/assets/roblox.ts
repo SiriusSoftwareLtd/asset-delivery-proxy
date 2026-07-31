@@ -48,6 +48,52 @@ export class MalformedRobloxV2ResponseError extends Error {
   }
 }
 
+/** A discovery response Roblox answered with an explicit rejection rather than a location. */
+export class RobloxV2RejectedError extends Error {
+  readonly upstreamCode: number | undefined;
+
+  constructor(message: string, upstreamCode: number | undefined) {
+    super(message);
+    this.name = 'RobloxV2RejectedError';
+    this.upstreamCode = upstreamCode;
+  }
+}
+
+/**
+ * Roblox reports permission, moderation, and archival failures as HTTP 200 with an `errors`
+ * array, so a 2xx discovery response is not on its own proof of a usable result. Reading the
+ * rejection here keeps those distinguishable from a genuinely malformed body.
+ */
+function readRejection(value: object): RobloxV2RejectedError | undefined {
+  const errors = (value as { errors?: unknown }).errors;
+  if (!Array.isArray(errors) || errors.length === 0) {
+    return undefined;
+  }
+
+  const first = errors.find((entry): entry is { code?: unknown; message?: unknown } => {
+    return !!entry && typeof entry === 'object';
+  });
+
+  const code = typeof first?.code === 'number' && Number.isInteger(first.code) ? first.code : undefined;
+  const message =
+    typeof first?.message === 'string' && first.message.length > 0
+      ? first.message
+      : 'Roblox rejected the asset request';
+
+  return new RobloxV2RejectedError(message, code);
+}
+
+/**
+ * Roblox's own rejection code, when it is one a caller can act on. Anything else reads as a
+ * gateway failure, keeping the 502/504 distinction the rest of delivery relies on.
+ */
+export function rejectionStatus(upstreamCode: number | undefined): 401 | 403 | 404 | 502 {
+  if (upstreamCode === 401 || upstreamCode === 403 || upstreamCode === 404) {
+    return upstreamCode;
+  }
+  return 502;
+}
+
 export function buildRobloxV1Url(assetId: string): string {
   return `${ROBLOX_ASSET_DELIVERY_ORIGIN}/v1/asset/?id=${encodeURIComponent(assetId)}`;
 }
@@ -91,6 +137,11 @@ export function getFirstRobloxV2Discovery(value: unknown): RobloxV2Discovery {
     throw new MalformedRobloxV2ResponseError('Roblox v2 returned malformed JSON');
   }
 
+  const rejection = readRejection(value);
+  if (rejection) {
+    throw rejection;
+  }
+
   const locations = (value as { locations?: unknown }).locations;
   if (!Array.isArray(locations)) {
     throw new MalformedRobloxV2ResponseError('Roblox v2 response has no locations');
@@ -122,7 +173,7 @@ export async function parseRobloxV2Discovery(response: Response): Promise<Roblox
   try {
     return getFirstRobloxV2Discovery(await response.json());
   } catch (error) {
-    if (error instanceof MalformedRobloxV2ResponseError) throw error;
+    if (error instanceof MalformedRobloxV2ResponseError || error instanceof RobloxV2RejectedError) throw error;
     throw new MalformedRobloxV2ResponseError('Roblox v2 returned invalid JSON');
   }
 }

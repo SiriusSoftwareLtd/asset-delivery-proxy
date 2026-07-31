@@ -156,6 +156,71 @@ describe('asset delivery rollout', () => {
     fetchMock.mockRestore();
   });
 
+  test('authenticates discovery without dropping allowlisted headers', async () => {
+    const cache = createCache();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/authed' }] }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([9])));
+
+    const incoming = request('707');
+    const headers = new Headers(incoming.headers);
+    headers.set('Roblox-Place-Id', '42');
+    const testEnv = { ...createTestEnv(true, cache), ROBLOX_API_KEY: 'session-token' };
+    const response = await worker.fetch(new Request(incoming.url, { headers }), testEnv);
+
+    expect(response.status).toBe(200);
+    const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const discoveryHeaders = new Headers(discoveryRequest.headers);
+    expect(discoveryHeaders.get('Roblox-Place-Id')).toBe('42');
+    expect(discoveryHeaders.get('x-api-key')).toBe('session-token');
+    /* the signed CDN location must never receive the api key */
+    const locationRequest = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(new Headers(locationRequest?.headers).get('x-api-key')).toBeNull();
+    fetchMock.mockRestore();
+  });
+
+  test('omits the api key header when no session is configured', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/anon' }] }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([10])));
+
+    const testEnv = { ...createTestEnv(true, createCache()), ROBLOX_API_KEY: '' };
+    await worker.fetch(request('808'), testEnv);
+
+    const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(discoveryRequest.headers).has('x-api-key')).toBe(false);
+    fetchMock.mockRestore();
+  });
+
+  test('surfaces a rejected discovery instead of reporting it as malformed', async () => {
+    const cache = createCache();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      /* Roblox answers permission failures with 200 and an errors array */
+      Response.json({ errors: [{ code: 401, message: 'Authentication required to access Asset.' }] }),
+    );
+
+    const response = await worker.fetch(request('909'), createTestEnv(true, cache));
+    const body = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(401);
+    expect(body.error).toBe('Authentication required to access Asset.');
+    expect([...cache.values.keys()].some((key) => key.includes('909'))).toBe(false);
+    fetchMock.mockRestore();
+  });
+
+  test('treats an unusable rejection code as a gateway failure', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(Response.json({ errors: [{ code: 0, message: 'Unknown upstream failure' }] }));
+
+    const response = await worker.fetch(request('910'), createTestEnv(true, createCache()));
+
+    expect(response.status).toBe(502);
+    fetchMock.mockRestore();
+  });
+
   test('v2 404 is negatively cached, while malformed discovery is a 502 without a cache write', async () => {
     const cache = createCache();
     const fetchMock = vi
