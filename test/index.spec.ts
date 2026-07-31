@@ -174,9 +174,9 @@ describe('asset delivery rollout', () => {
     const discoveryHeaders = new Headers(discoveryRequest.headers);
     expect(discoveryHeaders.get('Roblox-Place-Id')).toBe('42');
     expect(discoveryHeaders.get('x-api-key')).toBe('session-token');
-    /* the signed CDN location must never receive the session cookie */
+    /* the signed CDN location must never receive the api key */
     const locationRequest = fetchMock.mock.calls[1]?.[1] as RequestInit;
-    expect(new Headers(locationRequest?.headers).get('Cookie')).toBeNull();
+    expect(new Headers(locationRequest?.headers).get('x-api-key')).toBeNull();
     fetchMock.mockRestore();
   });
 
