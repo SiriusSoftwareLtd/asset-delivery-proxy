@@ -164,7 +164,7 @@ export async function fetchAsset(assetId: string, c: AppContext, request: Reques
       let robloxResponse: Response;
       try {
         const robloxHeaders = new Headers(v2Request?.init.headers);
-        robloxHeaders.set('Cookie', `.ROBLOSECURITY=${c.env.RBLX_COOKIE};`);
+        robloxHeaders.set('x-api-key', c.env.ROBLOX_API_KEY);
 
         const discoveryResponse = await fetch(v2Request?.url ?? buildRobloxV1Url(assetId), {
           ...(v2Request?.init ?? {}),

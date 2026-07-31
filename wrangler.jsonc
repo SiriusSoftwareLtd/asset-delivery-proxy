@@ -45,7 +45,7 @@
 		"OBSERVABILITY_REPORT_LEVEL": "off",
 	},
 	"secrets": {
-		"required": ["RBLX_COOKIE"],
+		"required": ["ROBLOX_API_KEY"],
 	},
 	"upload_source_maps": true,
 	"flagship": [
