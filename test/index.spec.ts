@@ -186,7 +186,7 @@ describe('asset delivery rollout', () => {
       .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/anon' }] }))
       .mockResolvedValueOnce(new Response(new Uint8Array([10])));
 
-    const testEnv = { ...createTestEnv(true, createCache()), RBLX_COOKIE: '' };
+    const testEnv = { ...createTestEnv(true, createCache()), ROBLOX_API_KEY: '' };
     await worker.fetch(request('808'), testEnv);
 
     const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
