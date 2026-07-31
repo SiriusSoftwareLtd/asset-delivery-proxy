@@ -166,14 +166,14 @@ describe('asset delivery rollout', () => {
     const incoming = request('707');
     const headers = new Headers(incoming.headers);
     headers.set('Roblox-Place-Id', '42');
-    const testEnv = { ...createTestEnv(true, cache), RBLX_COOKIE: 'session-token' };
+    const testEnv = { ...createTestEnv(true, cache), ROBLOX_API_KEY: 'session-token' };
     const response = await worker.fetch(new Request(incoming.url, { headers }), testEnv);
 
     expect(response.status).toBe(200);
     const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const discoveryHeaders = new Headers(discoveryRequest.headers);
     expect(discoveryHeaders.get('Roblox-Place-Id')).toBe('42');
-    expect(discoveryHeaders.get('Cookie')).toBe('.ROBLOSECURITY=session-token;');
+    expect(discoveryHeaders.get('x-api-key')).toBe('session-token');
     /* the signed CDN location must never receive the session cookie */
     const locationRequest = fetchMock.mock.calls[1]?.[1] as RequestInit;
     expect(new Headers(locationRequest?.headers).get('Cookie')).toBeNull();
