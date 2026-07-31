@@ -7,6 +7,8 @@ import {
   buildRobloxV2Request,
   MalformedRobloxV2ResponseError,
   parseRobloxV2Discovery,
+  RobloxV2RejectedError,
+  rejectionStatus,
 } from './roblox';
 
 const ROBLOX_TIMEOUT_MS = 10_000;
@@ -164,7 +166,10 @@ export async function fetchAsset(assetId: string, c: AppContext, request: Reques
       let robloxResponse: Response;
       try {
         const robloxHeaders = new Headers(v2Request?.init.headers);
-        robloxHeaders.set('Cookie', `.ROBLOSECURITY=${c.env.RBLX_COOKIE};`);
+        /* An unset secret would otherwise send Roblox a literal "undefined" session. */
+        if (c.env.RBLX_COOKIE) {
+          robloxHeaders.set('Cookie', `.ROBLOSECURITY=${c.env.RBLX_COOKIE};`);
+        }
 
         const discoveryResponse = await fetch(v2Request?.url ?? buildRobloxV1Url(assetId), {
           ...(v2Request?.init ?? {}),
@@ -180,6 +185,15 @@ export async function fetchAsset(assetId: string, c: AppContext, request: Reques
           robloxResponse = await fetch(discovery.location, { signal: AbortSignal.timeout(ROBLOX_TIMEOUT_MS) });
         }
       } catch (error) {
+        if (error instanceof RobloxV2RejectedError) {
+          logEvent(
+            'warn',
+            'asset.upstream.rejected',
+            { requestId, assetId, upstreamStatus: error.upstreamCode, reason: error.message },
+            c.env,
+          );
+          throw new HTTPException(rejectionStatus(error.upstreamCode), { message: error.message, cause: error });
+        }
         if (error instanceof MalformedRobloxV2ResponseError) {
           throw new HTTPException(502, { message: error.message, cause: error });
         }
