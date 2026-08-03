@@ -240,7 +240,8 @@ function resolutionToDelivery(
 
 async function resolveMiss(
   c: AppContext,
-  identity: AssetResolutionIdentity,
+	identity: AssetResolutionIdentity,
+  layeredCacheEnabled: boolean,
   coordinatorEnabled: boolean,
   backpressureEnabled: boolean,
   applyClientLimit = true,
@@ -249,8 +250,22 @@ async function resolveMiss(
 
   if (coordinatorEnabled) {
     const coordinated = await resolveThroughCoordinator(c.env, identity, backpressureEnabled);
-    const cacheStatus: CacheStatus = coordinated.result.kind === 'not-found' ? 'negative-write' : 'miss';
-    return {
+    let cacheStatus: CacheStatus;
+
+    if (coordinated.result.origin === 'kv') {
+      cacheStatus =
+        coordinated.result.kind === 'not-found'
+          ? 'negative-hit'
+          : layeredCacheEnabled
+            ? 'kv-fresh-hit'
+            : 'hit';
+    } else {
+      cacheStatus =
+        coordinated.result.kind === 'not-found'
+          ? 'negative-write'
+          : 'miss';
+		}
+		return {
       delivery: resolutionToDelivery(identity.assetId, coordinated.result, cacheStatus),
       shard: coordinated.shard,
       resolution: coordinated.result,
@@ -266,7 +281,8 @@ async function resolveMiss(
 
 function scheduleStaleRefresh(
   c: AppContext,
-  identity: AssetResolutionIdentity,
+	identity: AssetResolutionIdentity,
+  layeredCacheEnabled: boolean,
   coordinatorEnabled: boolean,
   backpressureEnabled: boolean,
 ): Promise<void> {
@@ -278,7 +294,7 @@ function scheduleStaleRefresh(
     return Promise.resolve();
   }
 
-  const refresh = resolveMiss(c, identity, coordinatorEnabled, backpressureEnabled, false).then(
+  const refresh = resolveMiss(c, identity, layeredCacheEnabled, coordinatorEnabled, backpressureEnabled, false).then(
     () => undefined,
     () => undefined,
   );
@@ -373,7 +389,7 @@ export async function fetchAsset(
           return cachedAssetResult(assetId, kv.entry, layeredCacheEnabled ? 'kv-fresh-hit' : 'hit');
         }
         if (layeredCacheEnabled) {
-          c.executionCtx.waitUntil(scheduleStaleRefresh(c, identity, coordinatorEnabled, backpressureEnabled));
+          c.executionCtx.waitUntil(scheduleStaleRefresh(c, identity, layeredCacheEnabled, coordinatorEnabled, backpressureEnabled));
           writeAssetMetric(c.env, {
             resolutionPath: 'kv',
             cacheOutcome: 'stale-hit',
@@ -385,7 +401,7 @@ export async function fetchAsset(
         }
       }
 
-      const { delivery, resolution, shard } = await resolveMiss(c, identity, coordinatorEnabled, backpressureEnabled);
+      const { delivery, resolution, shard } = await resolveMiss(c, identity, layeredCacheEnabled, coordinatorEnabled, backpressureEnabled);
       if (delivery.kind === 'asset' && layeredCacheEnabled) {
         const entry: AssetCacheEntry = {
           data: delivery.data,
