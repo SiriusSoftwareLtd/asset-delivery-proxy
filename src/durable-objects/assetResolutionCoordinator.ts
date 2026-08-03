@@ -2,7 +2,12 @@ import { DurableObject } from 'cloudflare:workers';
 import { readKv, writeAssetToKv, writeNotFoundToKv } from '../services/assets/cache';
 import { resolveAssetExtension } from '../services/assets/extension';
 import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../services/assets/roblox';
-import type { AssetCoordinatorRequest, AssetResolutionOrigin, AssetResolutionResult } from '../types/app';
+import type {
+  AssetCacheWriteOutcome,
+  AssetCoordinatorRequest,
+  AssetResolutionOrigin,
+  AssetResolutionResult,
+} from '../types/app';
 
 const COOLDOWN_KEY = 'cooldownUntil';
 const NEXT_PERMIT_KEY = 'nextPermitAt';
@@ -111,6 +116,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
         queueTimeMs: 0,
         joined: false,
         origin: 'kv',
+        cacheWrite: 'not-attempted',
       };
     }
     if (cached.kind === 'not-found') {
@@ -123,6 +129,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
         queueTimeMs: 0,
         joined: false,
         origin: 'kv',
+        cacheWrite: 'not-attempted',
       };
     }
 
@@ -229,7 +236,12 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           if (upstreamStatus === 404) {
             const timestamp = Date.now();
             await response.body?.cancel().catch(() => undefined);
-            await writeNotFoundToKv(this.env.assetCache, request.identity, timestamp).catch(() => undefined);
+            let cacheWrite: AssetCacheWriteOutcome = 'written';
+            try {
+              await writeNotFoundToKv(this.env.assetCache, request.identity, timestamp);
+            } catch {
+              cacheWrite = 'failed';
+            }
             return {
               kind: 'not-found',
               status: 404,
@@ -240,6 +252,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
               queueTimeMs,
               joined: false,
               origin: 'upstream',
+              cacheWrite,
             };
           }
 
@@ -284,6 +297,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             queueTimeMs,
             joined: false,
             origin: 'upstream',
+            cacheWrite: 'not-attempted',
           };
         }
 
@@ -301,14 +315,12 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           );
         }
         const timestamp = Date.now();
-        await writeAssetToKv(
-          this.env.assetCache,
-          request.identity,
-          data,
-          contentType,
-          resolved.extension,
-          timestamp,
-        ).catch(() => undefined);
+        let cacheWrite: AssetCacheWriteOutcome = 'written';
+        try {
+          await writeAssetToKv(this.env.assetCache, request.identity, data, contentType, resolved.extension, timestamp);
+        } catch {
+          cacheWrite = 'failed';
+        }
         return {
           kind: 'asset',
           status: 200,
@@ -321,6 +333,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           queueTimeMs,
           joined: false,
           origin: 'upstream',
+          cacheWrite,
         };
       } finally {
         if (permitHeld) this.releasePermit();
@@ -349,6 +362,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
       attempts,
       queueTimeMs,
       joined: false,
+      cacheWrite: 'not-attempted',
     };
   }
 

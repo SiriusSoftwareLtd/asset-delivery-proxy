@@ -57,6 +57,7 @@ export type AssetProtocol = 'v1' | 'v2';
  * - `admission`: The coordinator rejected the request before contacting Roblox, such as for cooldown, queue limits, or an expired deadline.
  */
 export type AssetResolutionOrigin = 'kv' | 'upstream' | 'admission';
+export type AssetCacheWriteOutcome = 'written' | 'failed' | 'not-attempted';
 
 export type AssetResolutionIdentity = {
   assetId: string;
@@ -81,6 +82,7 @@ export type AssetResolutionResult =
       queueTimeMs: number;
       joined: boolean;
       origin: AssetResolutionOrigin;
+      cacheWrite?: AssetCacheWriteOutcome;
     }
   | {
       kind: 'not-found' | 'error';
@@ -95,6 +97,7 @@ export type AssetResolutionResult =
       queueTimeMs: number;
       joined: boolean;
       origin: AssetResolutionOrigin;
+      cacheWrite?: AssetCacheWriteOutcome;
     };
 
 export type AssetCoordinatorRequest = {

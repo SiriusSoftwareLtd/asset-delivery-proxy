@@ -245,6 +245,24 @@ function metricCacheOutcome(cacheStatus: CacheStatus): string {
   return 'miss';
 }
 
+function coordinatedCacheStatus(result: AssetResolutionResult, layeredCacheEnabled: boolean): CacheStatus {
+  if (result.origin === 'kv') {
+    return result.kind === 'not-found' ? 'negative-hit' : layeredCacheEnabled ? 'kv-fresh-hit' : 'hit';
+  }
+
+  if (result.kind === 'not-found') {
+    if (result.cacheWrite === 'written') return 'negative-write';
+    if (result.cacheWrite === 'failed') return 'write-error';
+    return 'miss';
+  }
+
+  if (result.kind === 'asset') {
+    return result.cacheWrite === 'failed' ? 'write-error' : 'miss';
+  }
+
+  return 'miss';
+}
+
 async function resolveMiss(
   c: AppContext,
   identity: AssetResolutionIdentity,
@@ -257,13 +275,17 @@ async function resolveMiss(
 
   if (coordinatorEnabled) {
     const coordinated = await resolveThroughCoordinator(c.env, identity, backpressureEnabled);
-    let cacheStatus: CacheStatus;
-
-    if (coordinated.result.origin === 'kv') {
-      cacheStatus =
-        coordinated.result.kind === 'not-found' ? 'negative-hit' : layeredCacheEnabled ? 'kv-fresh-hit' : 'hit';
-    } else {
-      cacheStatus = coordinated.result.kind === 'not-found' ? 'negative-write' : 'miss';
+    const cacheStatus = coordinatedCacheStatus(coordinated.result, layeredCacheEnabled);
+    if (cacheStatus === 'write-error') {
+      logEvent(
+        'warn',
+        coordinated.result.kind === 'not-found' ? 'asset.cache.negative_write_failed' : 'asset.cache.write_failed',
+        {
+          requestId: c.get('requestId'),
+          assetBytes: coordinated.result.kind === 'asset' ? coordinated.result.data.byteLength : undefined,
+        },
+        c.env,
+      );
     }
     return {
       delivery: resolutionToDelivery(identity.assetId, coordinated.result, cacheStatus),
@@ -294,7 +316,22 @@ function scheduleStaleRefresh(
   }
 
   const refresh = resolveThroughCoordinator(c.env, identity, coordinatorEnabled && backpressureEnabled).then(
-    () => undefined,
+    ({ result }) => {
+      if (result.cacheWrite === 'failed') {
+        logEvent(
+          'warn',
+          result.kind === 'not-found'
+            ? 'asset.cache.stale_refresh_negative_write_failed'
+            : 'asset.cache.stale_refresh_write_failed',
+          {
+            requestId: c.get('requestId'),
+            protocol: identity.protocol,
+            assetBytes: result.kind === 'asset' ? result.data.byteLength : undefined,
+          },
+          c.env,
+        );
+      }
+    },
     () => undefined,
   );
   staleRefreshes.set(identity.canonicalKey, refresh);
