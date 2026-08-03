@@ -1,6 +1,8 @@
 name: CD
+
 permissions:
   contents: read
+
 on:
   workflow_run:
     workflows: [CI]
@@ -14,26 +16,30 @@ concurrency:
 jobs:
   verify-current-main:
     name: Verify Current Main Head
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'
+      }}
     runs-on: ubuntu-latest
+
     outputs:
       should_deploy: ${{ steps.stale_sha_guard.outputs.should_deploy }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          persist-credentials: false
-          submodules: true
 
+    steps:
       - name: Guard Against Stale CI SHA
         id: stale_sha_guard
+        shell: bash
         run: |
           set -euo pipefail
 
-          current_main_sha="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-          echo "current_main_sha=${current_main_sha}" >> "${GITHUB_OUTPUT}"
+          current_main_sha="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
 
-          if [ "${CI_HEAD_SHA}" = "${current_main_sha}" ]; then
+          if [[ "${CI_HEAD_SHA}" == "${current_main_sha}" ]]; then
             echo "should_deploy=true" >> "${GITHUB_OUTPUT}"
             echo "CI SHA ${CI_HEAD_SHA} is current main; deployment may continue."
           else
@@ -41,38 +47,66 @@ jobs:
             echo "CI SHA ${CI_HEAD_SHA} is stale; current main is ${current_main_sha}. Skipping deployment."
           fi
         env:
+          GH_TOKEN: ${{ github.token }}
           CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
 
   deploy:
     name: Deploy Worker
     needs: verify-current-main
-    if: >-
-      ${{
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        needs.verify-current-main.outputs.should_deploy == 'true'
-      }}
+    if: needs.verify-current-main.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
     environment: production
+
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Checkout Tested Commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
           submodules: true
 
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+      - name: Set Up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
         with:
           version: 11.18.0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - name: Set Up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          cache: 'pnpm'
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: pnpm ci
 
+      # Re-check immediately before deployment in case main advanced while
+      # dependencies were being installed.
+      - name: Verify Main Has Not Advanced
+        id: pre_deploy_guard
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+
+          if [[ "${CI_HEAD_SHA}" == "${current_main_sha}" ]]; then
+            echo "should_deploy=true" >> "${GITHUB_OUTPUT}"
+            echo "CI SHA ${CI_HEAD_SHA} is still current main."
+          else
+            echo "should_deploy=false" >> "${GITHUB_OUTPUT}"
+            echo "CI SHA ${CI_HEAD_SHA} is no longer current main; current main is ${current_main_sha}. Skipping deployment."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+
       - name: Deploy Worker
+        if: steps.pre_deploy_guard.outputs.should_deploy == 'true'
         run: pnpm deploy
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
