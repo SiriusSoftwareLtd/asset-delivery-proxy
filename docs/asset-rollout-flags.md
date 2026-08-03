@@ -1,0 +1,47 @@
+# Asset Rollout Flags
+
+This Worker uses Cloudflare Flagship boolean flags to roll out asset-delivery behavior without changing public routes,
+headers, binding names, or request and response shapes. All flags default to `false` in code. If Flagship evaluation fails,
+the Worker logs `asset.flag.evaluation_failed` according to `OBSERVABILITY_REPORT_LEVEL` and continues with the `false`
+path.
+
+The flags below affect only `GET /assets/:assetId` and `POST /assets/batch`. Icon routes do not use these rollout flags.
+
+## Flag map
+
+| Flag | Purpose | `false` behavior | `true` behavior |
+| --- | --- | --- | --- |
+| `use-asset-delivery-v2` | Selects the Roblox asset-delivery protocol used to resolve a requested asset. | Uses the established Roblox v1 asset-delivery request path and a v1 canonical cache key. | Uses Roblox v2 discovery, follows the first valid HTTPS location, forwards only allowlisted representation-affecting inputs, and varies the cache key by those inputs. |
+| `asset-cache-hit-exempt-limit` | Moves client rate limiting from every asset request to only cold miss resolution work. | The Worker applies `ASSET_PROXY_RATE_LIMITER` before route handling for every `/assets/` request, including cache hits. | Cache hits bypass the client rate-limit check. Cold misses still call `ASSET_PROXY_RATE_LIMITER` before contacting Roblox or the coordinator. A batch performs one lazy limit decision for its unique misses. |
+| `asset-cache-layered` | Enables the layered asset cache lifecycle on top of KV. | The Worker reads KV only. Fresh KV hits return `X-Cache-Status: hit`; stale KV entries are treated as misses and refetched before responding. | The Worker checks `caches.default` as an L1 cache, returns `l1-hit` for fresh L1 bytes, returns `kv-fresh-hit` for fresh KV bytes and repopulates L1, and returns `stale-hit` for stale KV bytes while refreshing in the background. |
+| `asset-upstream-coordinator` | Routes cache misses through the `ASSET_RESOLUTION_COORDINATOR` Durable Object. | Each cache miss resolves directly from Roblox in the request handler. | Misses go through a shard-selected Durable Object that coalesces same-key concurrent work, rechecks KV, and centralizes upstream retry and cooldown state. |
+| `asset-upstream-backpressure` | Enables coordinator admission control and retry behavior for upstream protection. | The coordinator still coalesces requests when `asset-upstream-coordinator` is enabled, but does not acquire permits, queue callers, rate permits, enter cooldown, or retry transient upstream responses. | The coordinator enforces permits, queue limits, permit spacing, persisted cooldown after upstream `429`, and one retry for retryable upstream failures when the request deadline allows it. Requires `ASSET_COORDINATOR_BUDGET_VERIFIED=true`; otherwise coordinated misses return `503` with `Retry-After: 60`. |
+
+## Rollout order
+
+Enable the flags in dependency order:
+
+1. `asset-cache-hit-exempt-limit`
+2. `asset-cache-layered`
+3. `asset-upstream-coordinator`
+4. `asset-upstream-backpressure`
+
+`use-asset-delivery-v2` is independent from the resilience rollout. It can be enabled or disabled separately, but v2
+changes cache identity because v2 allows representation-affecting query parameters and headers.
+
+## Related runtime vars
+
+These `wrangler.jsonc` vars are not Flagship flags, but they tune the flagged asset-resolution paths.
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `ASSET_COORDINATOR_BUDGET_VERIFIED` | `false` | Safety gate for `asset-upstream-backpressure`. Keep this `false` until Roblox quota identity and aggregate shard capacity are verified. |
+| `ASSET_COORDINATOR_SHARDS` | `16` | Number of Durable Object shards used by `asset-upstream-coordinator`. The client hashes each canonical cache key and selects `asset-shard-<n>`. |
+| `ASSET_COORDINATOR_CONCURRENCY` | `1` | Maximum active upstream resolutions per coordinator shard when backpressure is enabled. |
+| `ASSET_COORDINATOR_QUEUE_LIMIT` | `32` | Maximum queued waiters per coordinator shard when backpressure is enabled. A full queue returns `503` with `Retry-After`. |
+| `ASSET_COORDINATOR_PERMIT_INTERVAL_MS` | `1000` | Minimum spacing between upstream permits per coordinator shard when backpressure is enabled. |
+| `ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS` | `30` | Cooldown duration used when Roblox returns `429` without a usable `Retry-After` header. |
+| `ASSET_COORDINATOR_OPERATION_DEADLINE_MS` | `25000` | Request deadline passed to the coordinator for a miss resolution operation. |
+| `ASSET_COORDINATOR_RETRY_BASE_MS` | `250` | Base jittered delay before one retry of retryable upstream failures while backpressure is enabled. |
+| `ASSET_LEGACY_V1_READ_UNTIL` | `2026-09-01T00:00:00.000Z` | Cutoff for reading legacy bare v1 KV keys. All new writes use hashed canonical keys. |
+
