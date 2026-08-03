@@ -49,6 +49,15 @@ export type CurrentCachedAssetMetadata = {
 
 export type AssetProtocol = 'v1' | 'v2';
 
+/**
+ * Describes where an asset resolution result came from.
+ *
+ * - `kv`: The coordinator returned an asset or negative result from Workers KV without contacting Roblox.
+ * - `upstream`: The result came from a Roblox request, including upstream errors and timeouts.
+ * - `admission`: The coordinator rejected the request before contacting Roblox, such as for cooldown, queue limits, or an expired deadline.
+ */
+export type AssetResolutionOrigin = 'kv' | 'upstream' | 'admission';
+
 export type AssetResolutionIdentity = {
   assetId: string;
   canonicalKey: string;
@@ -71,6 +80,7 @@ export type AssetResolutionResult =
       attempts: number;
       queueTimeMs: number;
       joined: boolean;
+      origin: AssetResolutionOrigin;
     }
   | {
       kind: 'not-found' | 'error';
@@ -84,6 +94,7 @@ export type AssetResolutionResult =
       attempts: number;
       queueTimeMs: number;
       joined: boolean;
+      origin: AssetResolutionOrigin;
     };
 
 export type AssetCoordinatorRequest = {

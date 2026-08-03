@@ -26,6 +26,7 @@ export async function resolveThroughCoordinator(
         attempts: 0,
         queueTimeMs: 0,
         joined: false,
+        origin: 'admission',
       },
     };
   }

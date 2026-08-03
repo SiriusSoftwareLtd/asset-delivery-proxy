@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { readKv, writeAssetToKv, writeNotFoundToKv } from '../services/assets/cache';
 import { resolveAssetExtension } from '../services/assets/extension';
 import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../services/assets/roblox';
-import type { AssetCoordinatorRequest, AssetResolutionResult } from '../types/app';
+import type { AssetCoordinatorRequest, AssetResolutionOrigin, AssetResolutionResult } from '../types/app';
 
 const COOLDOWN_KEY = 'cooldownUntil';
 const NEXT_PERMIT_KEY = 'nextPermitAt';
@@ -106,6 +106,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
         attempts: 0,
         queueTimeMs: 0,
         joined: false,
+        origin: 'kv',
       };
     }
     if (cached.kind === 'not-found') {
@@ -117,13 +118,14 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
         attempts: 0,
         queueTimeMs: 0,
         joined: false,
+        origin: 'kv',
       };
     }
 
     let queueTimeMs = 0;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       if (Date.now() >= request.deadline) {
-        return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs);
+        return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs, 'upstream');
       }
 
       let permit: Permit = { queueTimeMs: 0 };
@@ -134,16 +136,17 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           permitHeld = true;
         } catch (error) {
           if (error instanceof PermitDeadlineError) {
-            return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs);
+            return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs, 'upstream');
           }
           if (error instanceof CooldownError) {
-            return this.errorResult(429, error.message, attempt - 1, queueTimeMs, error.retryAfter);
+            return this.errorResult(429, error.message, attempt - 1, queueTimeMs, 'upstream', error.retryAfter);
           }
           return this.errorResult(
             503,
             'Asset resolution queue is full',
             attempt - 1,
             queueTimeMs,
+            'admission',
             Math.max(1, Math.ceil(this.permitIntervalMs / 1_000)),
           );
         }
@@ -152,7 +155,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
 
       try {
         if (Date.now() >= request.deadline) {
-          return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs);
+          return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs, 'upstream');
         }
         const resolution = await fetchRobloxAsset(
           request.identity.protocol,
@@ -172,7 +175,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             this.releasePermit();
             permitHeld = false;
             if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
-              return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs);
+              return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs, 'upstream');
             }
             continue;
           }
@@ -181,6 +184,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             resolution.error,
             attempt,
             queueTimeMs,
+            'upstream',
             undefined,
             resolution.upstreamStatus,
           );
@@ -203,6 +207,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
               attempts: attempt,
               queueTimeMs,
               joined: false,
+              origin: 'upstream',
             };
           }
 
@@ -215,6 +220,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
               response.statusText || 'Too Many Requests',
               attempt,
               queueTimeMs,
+              'upstream',
               retryAfter,
               429,
             );
@@ -230,7 +236,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             this.releasePermit();
             permitHeld = false;
             if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
-              return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs);
+              return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs, 'upstream');
             }
             continue;
           }
@@ -245,6 +251,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             attempts: attempt,
             queueTimeMs,
             joined: false,
+            origin: 'upstream',
           };
         }
 
@@ -256,6 +263,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             'Roblox returned an empty asset',
             attempt,
             queueTimeMs,
+            'upstream',
             undefined,
             upstreamStatus,
           );
@@ -280,13 +288,14 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           attempts: attempt,
           queueTimeMs,
           joined: false,
+          origin: 'upstream',
         };
       } finally {
         if (permitHeld) this.releasePermit();
       }
     }
 
-    return this.errorResult(502, 'Unable to reach Roblox asset delivery', 2, queueTimeMs);
+    return this.errorResult(502, 'Unable to reach Roblox asset delivery', 2, queueTimeMs, 'upstream');
   }
 
   private errorResult(
@@ -294,12 +303,14 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     error: string,
     attempts: number,
     queueTimeMs: number,
+    origin: AssetResolutionOrigin,
     retryAfter?: number,
     upstreamStatus?: number,
   ): AssetResolutionResult {
     return {
       kind: 'error',
       status,
+      origin,
       error,
       retryAfter,
       upstreamStatus,

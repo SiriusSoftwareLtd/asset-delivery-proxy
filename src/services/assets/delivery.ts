@@ -113,6 +113,7 @@ async function resolveDirect(
         attempts: 1,
         queueTimeMs: 0,
         joined: false,
+        origin: 'upstream',
       },
     };
   }
@@ -146,6 +147,7 @@ async function resolveDirect(
           attempts: 1,
           queueTimeMs: 0,
           joined: false,
+          origin: 'upstream',
         },
       };
     }
@@ -163,6 +165,7 @@ async function resolveDirect(
         attempts: 1,
         queueTimeMs: 0,
         joined: false,
+        origin: 'upstream',
       },
     };
   }
@@ -196,6 +199,7 @@ async function resolveDirect(
       attempts: 1,
       queueTimeMs: 0,
       joined: false,
+      origin: 'upstream',
     },
   };
 }
