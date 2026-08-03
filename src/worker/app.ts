@@ -12,6 +12,25 @@ export const app = new Hono<AppEnvironment>();
 app.use('*', observeRequests);
 
 app.use('*', async (c, next) => {
+  const isAssetRoute = c.req.path.startsWith('/assets/');
+  if (isAssetRoute) {
+    try {
+      if (await c.env.FLAGS.getBooleanValue('asset-cache-hit-exempt-limit', false)) {
+        c.set('assetLazyLimitEnabled', true);
+        await next();
+        return;
+      }
+    } catch (error) {
+      logEvent(
+        'warn',
+        'asset.flag.evaluation_failed',
+        { requestId: c.get('requestId'), flag: 'asset-cache-hit-exempt-limit', ...getErrorFields(error) },
+        c.env,
+      );
+    }
+  }
+
+  c.set('assetLazyLimitEnabled', false);
   const rateLimiter = rateLimit(
     c.env.ASSET_PROXY_RATE_LIMITER,
     (context) => context.req.header('CF-Connecting-IP') ?? context.req.header('X-Forwarded-For') ?? 'anonymous',

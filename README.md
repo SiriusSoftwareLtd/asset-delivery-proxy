@@ -1,6 +1,6 @@
 # Asset Delivery Proxy
 
-A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. It validates asset IDs, requires an explicit secure-mode header, caches successful and not-found responses in Workers KV, and applies Cloudflare rate limiting before contacting Roblox.
+A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. It validates asset IDs, requires an explicit secure-mode header, and uses layered edge and persistent caching with bounded upstream coordination.
 
 ## Features
 
@@ -10,7 +10,9 @@ A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. I
 - Serves ordered batches of rendered provider icons from `POST /icon/batch`.
 - Rejects malformed asset IDs and requests that do not opt into secure mode.
 - Supports Roblox Asset Delivery v1 and an opt-in v2 path controlled by Cloudflare Flagship.
-- Caches assets and cache metadata in Workers KV; 404 responses are negatively cached for five minutes.
+- Uses the Cache API for fresh, data-center-local bytes and Workers KV as the authoritative seven-day cache.
+- Serves positive entries as fresh for 24 hours, then stale while a background refresh runs; 404 responses remain negatively cached for five minutes.
+- Coalesces identical cold resolutions and applies bounded upstream admission through hash-sharded Durable Objects.
 - Preserves the upstream content type and returns a detected `X-Asset-Extension` when available.
 - Emits structured logs, request IDs, cache-status headers, and tracing attributes.
 
@@ -45,9 +47,11 @@ Successful responses include the asset bytes and these useful headers:
 | --- | --- |
 | `X-Request-ID` | Request correlation ID. |
 | `X-Cache-Hit` | Whether the response was served from cache. |
-| `X-Cache-Status` | Cache outcome, such as `hit`, `miss`, or `negative-hit`. |
+| `X-Cache-Status` | Cache outcome, including `l1-hit`, `kv-fresh-hit`, `stale-hit`, `miss`, or `negative-hit`. |
 | `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or fetched response. |
 | `X-Asset-Extension` | Detected asset filename extension, when known. |
+
+Throttled and queue-rejected responses include `Retry-After`. With lazy miss limiting enabled, fresh, stale, and negative-cache hits do not consume the per-client Rate Limiting binding. A batch makes at most one client-limit decision after its cache lookups.
 
 ### Batch assets
 
@@ -63,7 +67,7 @@ The JSON body must contain between 1 and 25 decimal asset IDs (each up to 20 dig
 { "assetIds": ["101", "202"] }
 ```
 
-A valid batch returns `200` and preserves input order. Each successful item contains the asset bytes as base64 in `dataBase64`, along with `contentType`, an optional `extension`, `cacheStatus`, and `cacheHit`. Failed items contain their individual HTTP `status`, `cacheStatus`, `cacheHit`, and `error`; one item failing does not fail the whole batch. Malformed JSON, an invalid body, an empty or over-25 list, or an invalid asset ID returns `400`. Missing secure mode returns `403` before processing items. Batch processing allows at most six active asset operations at once.
+A valid batch returns `200` and preserves input order. Each successful item contains the asset bytes as base64 in `dataBase64`, along with `contentType`, an optional `extension`, `cacheStatus`, and `cacheHit`. Failed items contain their individual HTTP `status`, `cacheStatus`, `cacheHit`, and `error`; one item failing does not fail the whole batch. Malformed JSON, an invalid body, an empty or over-25 list, or an invalid asset ID returns `400`. Missing secure mode returns `403` before processing items. Batch processing allows at most six caller-side asset operations at once and groups duplicate canonical identities before coordinator admission.
 
 ### Icons
 
@@ -107,9 +111,19 @@ The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). It requires
 | --- | --- | --- |
 | `assetCache` | Workers KV namespace | Asset and negative-response cache. |
 | `ASSET_PROXY_RATE_LIMITER` | Workers Rate Limiting binding | Per-client request limiting. |
-| `FLAGS` | Cloudflare Flagship binding | Enables the optional `use-asset-delivery-v2` flag. |
+| `ASSET_RESOLUTION_COORDINATOR` | Durable Object namespace | Per-key coalescing, admission, retry, and cooldown state. |
+| `ASSET_METRICS` | Analytics Engine dataset | Low-cardinality cache and resolution outcomes. |
+| `FLAGS` | Cloudflare Flagship binding | Controls protocol and resilience rollout flags. |
+
+Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding path without changing public routes.
+
+Coordinator shard count, concurrency, queue size, permit interval, fallback cooldown, retry base, and operation deadline are configured through `ASSET_COORDINATOR_*` vars. `ASSET_COORDINATOR_BUDGET_VERIFIED` is checked before backpressure can run and is committed as `false`; leave it false until Roblox quota identity and capacity have been verified and the aggregate shard settings have been calibrated at or below that budget. The checked-in numeric values are inert rollout defaults, not claimed Roblox limits.
+
+Legacy bare v1 KV keys are read only until `ASSET_LEGACY_V1_READ_UNTIL`; all new writes use hashed canonical keys. Remove the fallback after that cutoff once migration hit metrics show it is no longer needed.
 
 Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc` with identifiers from your account. Do not commit credentials or API tokens. Store sensitive runtime values with Wrangler secrets instead:
+
+`ROBLOX_API_KEY` is sent as the `x-api-key` header on Roblox v1 requests and on both the discovery and returned asset-download requests for v2. When the secret is empty or unavailable, the header is omitted.
 
 ```sh
 pnpm exec wrangler secret put YOUR_SECRET_NAME

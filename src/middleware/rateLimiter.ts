@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
+import type { AppContext } from '../types/app';
 
 const RATE_LIMIT_CONTEXT_KEY = '.rateLimit';
 
@@ -48,3 +49,24 @@ export const rateLimit = (rateLimitBinding: RateLimitBinding, keyFunc: RateLimit
 export const rateLimitPassed = (c: Context): boolean | undefined => {
   return c.get(RATE_LIMIT_CONTEXT_KEY);
 };
+
+function clientRateLimitKey(c: AppContext): string {
+  return c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For') ?? 'anonymous';
+}
+
+/** Applies the client limiter once, and only after an asset request has a true cache miss. */
+export async function limitAssetMiss(c: AppContext): Promise<void> {
+  let decision = c.get('assetMissLimit');
+  if (!decision) {
+    decision = c.env.ASSET_PROXY_RATE_LIMITER.limit({ key: clientRateLimitKey(c) }).then(({ success }) => success);
+    c.set('assetMissLimit', decision);
+  }
+
+  const success = await decision;
+  c.set(RATE_LIMIT_CONTEXT_KEY, success);
+  if (!success) {
+    throw new HTTPException(429, {
+      res: new Response('Too Many Requests', { status: 429 }),
+    });
+  }
+}
