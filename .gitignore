@@ -168,3 +168,6 @@ dist
 
 # pnpm
 .pnpm-store
+
+# OS Specific files
+*.DS_Store
