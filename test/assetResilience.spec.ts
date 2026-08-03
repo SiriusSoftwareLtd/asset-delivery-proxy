@@ -86,4 +86,68 @@ describe('asset resilience primitives', () => {
     fetchMock.mockRestore();
     await env.assetCache.delete(identity.physicalKey);
   });
+
+  test('expires a queued coordinator request before it receives a permit', async () => {
+    const activeAssetId = uniqueAssetId();
+    const expiredAssetId = uniqueAssetId();
+    const laterAssetId = uniqueAssetId();
+    const activeIdentity = await buildAssetResolutionIdentity(
+      activeAssetId,
+      new Request(`https://proxy.test/assets/${activeAssetId}`),
+      false,
+    );
+    const expiredIdentity = await buildAssetResolutionIdentity(
+      expiredAssetId,
+      new Request(`https://proxy.test/assets/${expiredAssetId}`),
+      false,
+    );
+    const laterIdentity = await buildAssetResolutionIdentity(
+      laterAssetId,
+      new Request(`https://proxy.test/assets/${laterAssetId}`),
+      false,
+    );
+    await Promise.all([
+      env.assetCache.delete(activeIdentity.physicalKey),
+      env.assetCache.delete(expiredIdentity.physicalKey),
+      env.assetCache.delete(laterIdentity.physicalKey),
+    ]);
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`queue-deadline-${activeAssetId}`);
+    let releaseFetch: (() => void) | undefined;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      if (fetchMock.mock.calls.length === 1) await fetchGate;
+      return new Response(new Uint8Array([7]), { headers: { 'Content-Type': 'image/png' } });
+    });
+
+    const active = stub.resolve({ identity: activeIdentity, deadline: Date.now() + 10_000, backpressure: true });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const expired = await stub.resolve({ identity: expiredIdentity, deadline: Date.now() + 50, backpressure: true });
+
+    expect(expired).toEqual(
+      expect.objectContaining({
+        kind: 'error',
+        status: 504,
+        error: 'Roblox asset delivery timed out',
+        attempts: 0,
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const later = stub.resolve({ identity: laterIdentity, deadline: Date.now() + 10_000, backpressure: true });
+    releaseFetch?.();
+    const [activeResult, laterResult] = await Promise.all([active, later]);
+
+    expect(activeResult).toEqual(expect.objectContaining({ kind: 'asset', status: 200, attempts: 1 }));
+    expect(laterResult).toEqual(expect.objectContaining({ kind: 'asset', status: 200, attempts: 1 }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockRestore();
+    await Promise.all([
+      env.assetCache.delete(activeIdentity.physicalKey),
+      env.assetCache.delete(expiredIdentity.physicalKey),
+      env.assetCache.delete(laterIdentity.physicalKey),
+    ]);
+  });
 });

@@ -10,8 +10,11 @@ const NEXT_PERMIT_KEY = 'nextPermitAt';
 type Permit = { queueTimeMs: number };
 type PermitWaiter = {
   enqueuedAt: number;
+  deadline: number;
   resolve: (permit: Permit) => void;
   reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+  settled: boolean;
 };
 
 class QueueFullError extends Error {}
@@ -20,6 +23,7 @@ class CooldownError extends Error {
     super('Roblox asset delivery is cooling down');
   }
 }
+class PermitDeadlineError extends Error {}
 
 function readInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
   const parsed = Number(value);
@@ -28,6 +32,13 @@ function readInteger(value: string | undefined, fallback: number, minimum: numbe
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function sleepWithinDeadline(milliseconds: number, deadline: number): Promise<boolean> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) return false;
+  await sleep(Math.min(milliseconds, remainingMs));
+  return Date.now() < deadline;
 }
 
 function jitter(milliseconds: number): number {
@@ -121,9 +132,12 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
       let permitHeld = false;
       if (request.backpressure) {
         try {
-          permit = await this.acquirePermit();
+          permit = await this.acquirePermit(request.deadline);
           permitHeld = true;
         } catch (error) {
+          if (error instanceof PermitDeadlineError) {
+            return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs);
+          }
           if (error instanceof CooldownError) {
             return this.errorResult(429, error.message, attempt - 1, queueTimeMs, error.retryAfter);
           }
@@ -159,7 +173,9 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           ) {
             this.releasePermit();
             permitHeld = false;
-            await sleep(jitter(this.retryBaseMs));
+            if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
+              return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs);
+            }
             continue;
           }
           return this.errorResult(
@@ -215,7 +231,9 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             await response.body?.cancel().catch(() => undefined);
             this.releasePermit();
             permitHeld = false;
-            await sleep(jitter(this.retryBaseMs));
+            if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
+              return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs);
+            }
             continue;
           }
 
@@ -293,47 +311,113 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     };
   }
 
-  private acquirePermit(): Promise<Permit> {
+  private acquirePermit(deadline: number): Promise<Permit> {
     const now = Date.now();
+    if (now >= deadline) return Promise.reject(new PermitDeadlineError('Asset resolution deadline reached'));
+    this.expireQueuedWaiters(now);
     if (this.cooldownUntil > now) {
       return Promise.reject(new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000))));
     }
     if (this.active < this.concurrency) {
-      return this.grantPermit(now);
+      return this.grantPermit(now, deadline);
     }
     if (this.queue.length >= this.queueLimit) return Promise.reject(new QueueFullError('Queue full'));
 
     return new Promise((resolve, reject) => {
-      this.queue.push({ enqueuedAt: now, resolve, reject });
+      const waiter: PermitWaiter = {
+        enqueuedAt: now,
+        deadline,
+        resolve,
+        reject,
+        timeout: setTimeout(() => this.expireWaiter(waiter), Math.max(0, deadline - now)),
+        settled: false,
+      };
+      this.queue.push(waiter);
     });
   }
 
-  private async grantPermit(enqueuedAt: number): Promise<Permit> {
-    this.active += 1;
+  private async grantPermit(enqueuedAt: number, deadline: number): Promise<Permit> {
     const scheduledAt = Math.max(Date.now(), this.nextPermitAt);
+    if (scheduledAt >= deadline) throw new PermitDeadlineError('Asset resolution deadline reached');
+    this.active += 1;
+    let permitReleased = false;
     this.nextPermitAt = scheduledAt + this.permitIntervalMs;
-    await this.ctx.storage.put(NEXT_PERMIT_KEY, this.nextPermitAt);
-    if (scheduledAt > Date.now()) await sleep(scheduledAt - Date.now());
+    try {
+      await this.ctx.storage.put(NEXT_PERMIT_KEY, this.nextPermitAt);
+      if (scheduledAt > Date.now()) await sleep(scheduledAt - Date.now());
 
-    const now = Date.now();
-    if (this.cooldownUntil > now) {
-      this.releasePermit();
-      throw new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000)));
+      const now = Date.now();
+      if (now >= deadline) {
+        permitReleased = true;
+        this.releasePermit();
+        throw new PermitDeadlineError('Asset resolution deadline reached');
+      }
+      if (this.cooldownUntil > now) {
+        permitReleased = true;
+        this.releasePermit();
+        throw new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000)));
+      }
+      return { queueTimeMs: Math.max(0, now - enqueuedAt) };
+    } catch (error) {
+      if (!permitReleased) this.releasePermit();
+      throw error;
     }
-    return { queueTimeMs: Math.max(0, now - enqueuedAt) };
   }
 
   private releasePermit(): void {
     this.active = Math.max(0, this.active - 1);
-    const waiter = this.queue.shift();
-    if (!waiter) return;
-    void this.grantPermit(waiter.enqueuedAt).then(waiter.resolve, waiter.reject);
+    this.dispatchQueuedPermit();
   }
 
   private async enterCooldown(retryAfter: number): Promise<void> {
     this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + retryAfter * 1_000);
     await this.ctx.storage.put(COOLDOWN_KEY, this.cooldownUntil);
     const error = new CooldownError(retryAfter);
-    for (const waiter of this.queue.splice(0)) waiter.reject(error);
+    for (const waiter of this.queue.splice(0)) {
+      if (this.settleWaiter(waiter)) waiter.reject(error);
+    }
+  }
+
+  private dispatchQueuedPermit(): void {
+    this.expireQueuedWaiters();
+    if (this.active >= this.concurrency) return;
+
+    const waiter = this.queue.shift();
+    if (!waiter) return;
+    if (!this.settleWaiter(waiter)) {
+      this.dispatchQueuedPermit();
+      return;
+    }
+
+    void this.grantPermit(waiter.enqueuedAt, waiter.deadline).then(waiter.resolve, (error) => {
+      waiter.reject(error);
+      if (error instanceof PermitDeadlineError) this.dispatchQueuedPermit();
+    });
+  }
+
+  private expireQueuedWaiters(now = Date.now()): void {
+    for (let index = 0; index < this.queue.length; ) {
+      const waiter = this.queue[index];
+      if (!waiter || waiter.deadline > now) {
+        index += 1;
+        continue;
+      }
+
+      this.queue.splice(index, 1);
+      if (this.settleWaiter(waiter)) waiter.reject(new PermitDeadlineError('Asset resolution deadline reached'));
+    }
+  }
+
+  private expireWaiter(waiter: PermitWaiter): void {
+    const index = this.queue.indexOf(waiter);
+    if (index !== -1) this.queue.splice(index, 1);
+    if (this.settleWaiter(waiter)) waiter.reject(new PermitDeadlineError('Asset resolution deadline reached'));
+  }
+
+  private settleWaiter(waiter: PermitWaiter): boolean {
+    if (waiter.settled) return false;
+    waiter.settled = true;
+    clearTimeout(waiter.timeout);
+    return true;
   }
 }
