@@ -22,6 +22,12 @@ function createCache() {
         metadata: (stored?.metadata as T | undefined) ?? null,
       };
     },
+    async get(key: string, type?: 'arrayBuffer') {
+      const stored = values.get(key);
+      if (!stored) return null;
+      if (type === 'arrayBuffer') return stored.value;
+      return new TextDecoder().decode(stored.value);
+    },
     async put(key: string, value: ArrayBuffer, options?: { metadata?: unknown }) {
       values.set(key, { value, metadata: options?.metadata });
     },
@@ -33,7 +39,7 @@ function createCache() {
 
 function createTestEnv(
   flagValue: boolean | Error,
-  assetCache = createCache(),
+  assetCache: KVNamespace | ReturnType<typeof createCache> = createCache(),
   options: {
     enabledFlags?: string[];
     rateLimit?: () => Promise<{ success: boolean }>;
@@ -74,16 +80,16 @@ function batchRequest(body: unknown, headers: Record<string, string> = {}) {
   });
 }
 
-function seedStaleAsset(
-  cache: ReturnType<typeof createCache>,
+async function seedStaleAsset(
+  cache: KVNamespace,
   identity: Awaited<ReturnType<typeof buildAssetResolutionIdentity>>,
   data: Uint8Array,
-) {
+): Promise<void> {
   const storedAt = Date.now() - 25 * 60 * 60 * 1_000;
   const value = new ArrayBuffer(data.byteLength);
   new Uint8Array(value).set(data);
-  cache.values.set(identity.physicalKey, {
-    value,
+  await cache.put(identity.physicalKey, value, {
+    expirationTtl: 7 * 24 * 60 * 60,
     metadata: {
       kind: 'asset',
       version: 2,
@@ -457,113 +463,172 @@ describe('asset delivery rollout', () => {
   });
 
   test('serves stale KV bytes without client limiting and refreshes in the background', async () => {
-    const cache = createCache();
     const assetRequest = request('7301');
     const identity = await buildAssetResolutionIdentity('7301', assetRequest, false);
-    seedStaleAsset(cache, identity, new Uint8Array([3]));
+    await env.assetCache.delete(identity.physicalKey);
+    await seedStaleAsset(env.assetCache, identity, new Uint8Array([3]));
     const limiter = vi.fn(async () => ({ success: true }));
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(new Uint8Array([4]), { headers: { 'Content-Type': 'image/png' } }));
+      .mockImplementation(async () => new Response(new Uint8Array([4]), { headers: { 'Content-Type': 'image/png' } }));
 
-    const response = await worker.fetch(
-      assetRequest,
-      createTestEnv(false, cache, {
-        enabledFlags: ['asset-cache-layered', 'asset-cache-hit-exempt-limit'],
-        rateLimit: limiter,
-      }),
-    );
+    try {
+      const context = createExecutionContext();
+      const response = await sourceWorker.fetch(
+        new IncomingRequest(assetRequest.clone()),
+        createTestEnv(false, env.assetCache, {
+          enabledFlags: ['asset-cache-layered', 'asset-cache-hit-exempt-limit'],
+          rateLimit: limiter,
+        }),
+        context,
+      );
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get('X-Cache-Status')).toBe('stale-hit');
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([3]));
-    expect(limiter).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(new Uint8Array(cache.values.get(identity.physicalKey)?.value ?? new ArrayBuffer(0))).toEqual(
-      new Uint8Array([4]),
-    );
-    fetchMock.mockRestore();
-  });
-
-  test('coalesces concurrent stale refreshes without delaying stale responses', async () => {
-    const cache = createCache();
-    const assetRequest = request('7302');
-    const identity = await buildAssetResolutionIdentity('7302', assetRequest, false);
-    seedStaleAsset(cache, identity, new Uint8Array([3]));
-    const limiter = vi.fn(async () => ({ success: true }));
-    const testEnv = createTestEnv(false, cache, {
-      enabledFlags: ['asset-cache-layered', 'asset-cache-hit-exempt-limit'],
-      rateLimit: limiter,
-    });
-    let resolveRefresh: (response: Response) => void = () => undefined;
-    const refresh = new Promise<Response>((resolve) => {
-      resolveRefresh = resolve;
-    });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockReturnValue(refresh);
-    const contexts = Array.from({ length: 5 }, () => createExecutionContext());
-
-    const responses = await Promise.all(
-      contexts.map((context) => sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, context)),
-    );
-
-    for (const response of responses) {
       expect(response.status).toBe(200);
       expect(response.headers.get('X-Cache-Status')).toBe('stale-hit');
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([3]));
+      expect(limiter).not.toHaveBeenCalled();
+      await waitOnExecutionContext(context);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        new Uint8Array((await env.assetCache.get(identity.physicalKey, 'arrayBuffer')) ?? new ArrayBuffer(0)),
+      ).toEqual(new Uint8Array([4]));
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
     }
-    expect(limiter).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
-    resolveRefresh(new Response(new Uint8Array([4]), { headers: { 'Content-Type': 'image/png' } }));
-    await Promise.all(contexts.map((context) => waitOnExecutionContext(context)));
-    expect(new Uint8Array(cache.values.get(identity.physicalKey)?.value ?? new ArrayBuffer(0))).toEqual(
-      new Uint8Array([4]),
-    );
+  test('coalesces stale refreshes through the coordinator when the coordinator rollout flag is off', async () => {
+    const assetRequest = request('7302');
+    const identity = await buildAssetResolutionIdentity('7302', assetRequest, false);
+    await env.assetCache.delete(identity.physicalKey);
+    await seedStaleAsset(env.assetCache, identity, new Uint8Array([3]));
+    const limiter = vi.fn(async () => ({ success: true }));
+    const testEnv = createTestEnv(false, env.assetCache, {
+      enabledFlags: ['asset-cache-layered', 'asset-cache-hit-exempt-limit'],
+      rateLimit: limiter,
+    });
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let refreshBytes = new Uint8Array([4]);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await refreshGate;
+      return new Response(refreshBytes, { headers: { 'Content-Type': 'image/png' } });
+    });
+    const contexts = Array.from({ length: 5 }, () => createExecutionContext());
 
-    seedStaleAsset(cache, identity, new Uint8Array([4]));
-    const laterContext = createExecutionContext();
-    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([5]), { headers: { 'Content-Type': 'image/png' } }));
-    const later = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, laterContext);
-    expect(later.headers.get('X-Cache-Status')).toBe('stale-hit');
-    expect(new Uint8Array(await later.arrayBuffer())).toEqual(new Uint8Array([4]));
-    await waitOnExecutionContext(laterContext);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new Uint8Array(cache.values.get(identity.physicalKey)?.value ?? new ArrayBuffer(0))).toEqual(
-      new Uint8Array([5]),
-    );
-    fetchMock.mockRestore();
+    try {
+      const responses = await Promise.all(
+        contexts.map((context) => sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, context)),
+      );
+
+      for (const response of responses) {
+        expect(response.status).toBe(200);
+        expect(response.headers.get('X-Cache-Status')).toBe('stale-hit');
+        expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([3]));
+      }
+      expect(limiter).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+      releaseRefresh?.();
+      await Promise.all(contexts.map((context) => waitOnExecutionContext(context)));
+      expect(
+        new Uint8Array((await env.assetCache.get(identity.physicalKey, 'arrayBuffer')) ?? new ArrayBuffer(0)),
+      ).toEqual(new Uint8Array([4]));
+
+      await seedStaleAsset(env.assetCache, identity, new Uint8Array([4]));
+      const laterContext = createExecutionContext();
+      refreshBytes = new Uint8Array([5]);
+      const later = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, laterContext);
+      expect(later.headers.get('X-Cache-Status')).toBe('stale-hit');
+      expect(new Uint8Array(await later.arrayBuffer())).toEqual(new Uint8Array([4]));
+      await waitOnExecutionContext(laterContext);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(
+        new Uint8Array((await env.assetCache.get(identity.physicalKey, 'arrayBuffer')) ?? new ArrayBuffer(0)),
+      ).toEqual(new Uint8Array([5]));
+    } finally {
+      releaseRefresh?.();
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
   });
 
   test('cleans up stale refresh single-flight state after a failed refresh', async () => {
-    const cache = createCache();
     const assetRequest = request('7303');
     const identity = await buildAssetResolutionIdentity('7303', assetRequest, false);
-    seedStaleAsset(cache, identity, new Uint8Array([6]));
-    const testEnv = createTestEnv(false, cache, {
+    await env.assetCache.delete(identity.physicalKey);
+    await seedStaleAsset(env.assetCache, identity, new Uint8Array([6]));
+    const testEnv = createTestEnv(false, env.assetCache, {
       enabledFlags: ['asset-cache-layered', 'asset-cache-hit-exempt-limit'],
     });
+    let refreshAttempts = 0;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      refreshAttempts += 1;
+      if (refreshAttempts === 1) throw new Error('Roblox unavailable');
+      return new Response(new Uint8Array([7]), { headers: { 'Content-Type': 'image/png' } });
+    });
+
+    try {
+      const failedContext = createExecutionContext();
+      const failed = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, failedContext);
+      expect(failed.status).toBe(200);
+      expect(failed.headers.get('X-Cache-Status')).toBe('stale-hit');
+      expect(new Uint8Array(await failed.arrayBuffer())).toEqual(new Uint8Array([6]));
+      await waitOnExecutionContext(failedContext);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const retryContext = createExecutionContext();
+      const retry = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, retryContext);
+      expect(retry.headers.get('X-Cache-Status')).toBe('stale-hit');
+      expect(new Uint8Array(await retry.arrayBuffer())).toEqual(new Uint8Array([6]));
+      await waitOnExecutionContext(retryContext);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(
+        new Uint8Array((await env.assetCache.get(identity.physicalKey, 'arrayBuffer')) ?? new ArrayBuffer(0)),
+      ).toEqual(new Uint8Array([7]));
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('refreshes stale assets through the coordinator without unverified backpressure during rollout', async () => {
+    const assetRequest = request('7304');
+    const identity = await buildAssetResolutionIdentity('7304', assetRequest, false);
+    await env.assetCache.delete(identity.physicalKey);
+    await seedStaleAsset(env.assetCache, identity, new Uint8Array([8]));
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockRejectedValueOnce(new Error('Roblox unavailable'))
-      .mockResolvedValueOnce(new Response(new Uint8Array([7]), { headers: { 'Content-Type': 'image/png' } }));
+      .mockImplementation(async () => new Response(new Uint8Array([9]), { headers: { 'Content-Type': 'image/png' } }));
 
-    const failedContext = createExecutionContext();
-    const failed = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, failedContext);
-    expect(failed.headers.get('X-Cache-Status')).toBe('stale-hit');
-    expect(new Uint8Array(await failed.arrayBuffer())).toEqual(new Uint8Array([6]));
-    await waitOnExecutionContext(failedContext);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    try {
+      const context = createExecutionContext();
+      const response = await sourceWorker.fetch(
+        new IncomingRequest(assetRequest.clone()),
+        {
+          ...createTestEnv(false, env.assetCache, {
+            enabledFlags: ['asset-cache-layered', 'asset-upstream-backpressure'],
+          }),
+          ASSET_COORDINATOR_BUDGET_VERIFIED: 'false',
+        },
+        context,
+      );
 
-    const retryContext = createExecutionContext();
-    const retry = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, retryContext);
-    expect(retry.headers.get('X-Cache-Status')).toBe('stale-hit');
-    expect(new Uint8Array(await retry.arrayBuffer())).toEqual(new Uint8Array([6]));
-    await waitOnExecutionContext(retryContext);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new Uint8Array(cache.values.get(identity.physicalKey)?.value ?? new ArrayBuffer(0))).toEqual(
-      new Uint8Array([7]),
-    );
-    fetchMock.mockRestore();
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('stale-hit');
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([8]));
+      await waitOnExecutionContext(context);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        new Uint8Array((await env.assetCache.get(identity.physicalKey, 'arrayBuffer')) ?? new ArrayBuffer(0)),
+      ).toEqual(new Uint8Array([9]));
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
   });
 
   test('serves a fresh L1 hit without KV, upstream, or another client-limit decision', async () => {
