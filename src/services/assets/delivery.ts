@@ -381,9 +381,7 @@ export async function fetchAsset(
           return cachedAssetResult(assetId, kv.entry, layeredCacheEnabled ? 'kv-fresh-hit' : 'hit');
         }
         if (layeredCacheEnabled) {
-          c.executionCtx.waitUntil(
-            scheduleStaleRefresh(c, identity, coordinatorEnabled, backpressureEnabled),
-          );
+          c.executionCtx.waitUntil(scheduleStaleRefresh(c, identity, coordinatorEnabled, backpressureEnabled));
           writeAssetMetric(c.env, {
             resolutionPath: 'kv',
             cacheOutcome: 'stale-hit',
