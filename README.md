@@ -119,8 +119,10 @@ pnpm exec wrangler secret put ROBLOX_API_KEY
 pnpm deploy
 ```
 
-The CD workflow deploys the Worker after the `CI` workflow succeeds for a push to `main`. See
-[`docs/cd-secrets.md`](./docs/cd-secrets.md) for the required GitHub secrets and Cloudflare API token permissions.
+The CD workflow deploys the Worker from the `production` GitHub Actions environment after the `CI` workflow succeeds for a
+push to `main`, but only when that CI run's SHA is still the current `main` head. See
+[`docs/cd-secrets.md`](./docs/cd-secrets.md) for the required GitHub environment secret and Cloudflare API token
+permissions.
 
 Generate bindings types after changing `wrangler.jsonc`:
 

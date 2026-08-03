@@ -1,15 +1,22 @@
 # CD deployment configuration
 
-The CD workflow deploys the Worker after the `CI` workflow succeeds for a push to `main`. Configure these GitHub
-repository variables and secrets before enabling automated deployment:
+The CD workflow deploys the Worker from the `production` GitHub Actions environment after the `CI` workflow succeeds for a
+push to `main`, but only when that CI run's SHA is still the current `main` head. Older CI runs that complete after a
+newer `main` commit are skipped before deployment. Configure these GitHub repository variables, environments, and secrets
+before enabling automated deployment:
 
 | Type | Name | Value |
 | --- | --- | --- |
 | Repository variable | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account ID that owns the Worker and configured bindings. |
-| Repository secret | `CLOUDFLARE_API_TOKEN` | A Cloudflare user API token for non-interactive Wrangler deployment. |
+| Environment | `production` | The protected deployment environment used by the CD workflow's deploy job. |
+| Environment secret | `CLOUDFLARE_API_TOKEN` | A Cloudflare user API token for non-interactive Wrangler deployment. |
 
 `CLOUDFLARE_ACCOUNT_ID` is not sensitive. Store it as a GitHub Actions repository variable so the CD workflow can pass it
-to Wrangler as `vars.CLOUDFLARE_ACCOUNT_ID`. Keep only `CLOUDFLARE_API_TOKEN` in GitHub Actions repository secrets.
+to Wrangler as `vars.CLOUDFLARE_ACCOUNT_ID`. Keep `CLOUDFLARE_API_TOKEN` only in the `production` environment secrets, not
+in repository-level secrets.
+
+Protect the `production` environment with deployment branches limited to `main`. Add required reviewers if deployments
+need manual approval before GitHub releases environment secrets to the deploy job.
 
 Create the API token from the Cloudflare dashboard's account API tokens page. Use the **Edit Cloudflare Workers** custom
 permission template as the baseline, then scope resources as narrowly as possible:
