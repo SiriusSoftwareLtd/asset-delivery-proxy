@@ -115,7 +115,7 @@ The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). It requires
 | `ASSET_METRICS` | Analytics Engine dataset | Low-cardinality cache and resolution outcomes. |
 | `FLAGS` | Cloudflare Flagship binding | Controls protocol and resilience rollout flags. |
 
-Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding path without changing public routes.
+Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding path without changing public routes. See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete flag map.
 
 Coordinator shard count, concurrency, queue size, permit interval, fallback cooldown, retry base, and operation deadline are configured through `ASSET_COORDINATOR_*` vars. `ASSET_COORDINATOR_BUDGET_VERIFIED` is checked before backpressure can run and is committed as `false`; leave it false until Roblox quota identity and capacity have been verified and the aggregate shard settings have been calibrated at or below that budget. The checked-in numeric values are inert rollout defaults, not claimed Roblox limits.
 
