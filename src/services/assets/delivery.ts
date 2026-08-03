@@ -382,7 +382,7 @@ export async function fetchAsset(
         }
         if (layeredCacheEnabled) {
           c.executionCtx.waitUntil(
-            scheduleStaleRefresh(c, identity, layeredCacheEnabled, coordinatorEnabled, backpressureEnabled),
+            scheduleStaleRefresh(c, identity, coordinatorEnabled, backpressureEnabled),
           );
           writeAssetMetric(c.env, {
             resolutionPath: 'kv',
