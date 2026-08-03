@@ -105,30 +105,17 @@ The supported options are `size`, Remix `category`, Font Awesome `style` (`brand
 
 ## Configuration and deployment
 
-The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). It requires these Cloudflare bindings:
-
-| Binding | Type | Purpose |
-| --- | --- | --- |
-| `assetCache` | Workers KV namespace | Asset and negative-response cache. |
-| `ASSET_PROXY_RATE_LIMITER` | Workers Rate Limiting binding | Per-client request limiting. |
-| `ASSET_RESOLUTION_COORDINATOR` | Durable Object namespace | Per-key coalescing, admission, retry, and cooldown state. |
-| `ASSET_METRICS` | Analytics Engine dataset | Low-cardinality cache and resolution outcomes. |
-| `FLAGS` | Cloudflare Flagship binding | Controls protocol and resilience rollout flags. |
+The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). See
+[`docs/runtime-configuration.md`](./docs/runtime-configuration.md) for the complete bindings, vars, secrets, and
+billing-impact reference.
 
 Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding path without changing public routes. See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete flag map.
 
-Coordinator shard count, concurrency, queue size, permit interval, fallback cooldown, retry base, and operation deadline are configured through `ASSET_COORDINATOR_*` vars. `ASSET_COORDINATOR_BUDGET_VERIFIED` is checked before backpressure can run and is committed as `false`; leave it false until Roblox quota identity and capacity have been verified and the aggregate shard settings have been calibrated at or below that budget. The checked-in numeric values are inert rollout defaults, not claimed Roblox limits.
-
-Legacy bare v1 KV keys are read only until `ASSET_LEGACY_V1_READ_UNTIL`; all new writes use hashed canonical keys. Remove the fallback after that cutoff once migration hit metrics show it is no longer needed.
-
-Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc` with identifiers from your account. Do not commit credentials or API tokens. Store sensitive runtime values with Wrangler secrets instead:
-
-`ROBLOX_API_KEY` is sent as the `x-api-key` header to Roblox's authenticated Open Cloud asset-delivery endpoint.
-Configure an actual Open Cloud API key in `ROBLOX_API_KEY`. Authentication headers are not forwarded to returned signed
-asset-download locations.
+Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc`
+with identifiers from your account. Do not commit credentials or API tokens. Store `ROBLOX_API_KEY` with Wrangler secrets:
 
 ```sh
-pnpm exec wrangler secret put YOUR_SECRET_NAME
+pnpm exec wrangler secret put ROBLOX_API_KEY
 pnpm deploy
 ```
 
