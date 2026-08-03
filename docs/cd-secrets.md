@@ -1,12 +1,15 @@
-# CD secrets
+# CD deployment configuration
 
 The CD workflow deploys the Worker after the `CI` workflow succeeds for a push to `main`. Configure these GitHub
-repository secrets before enabling automated deployment:
+repository variables and secrets before enabling automated deployment:
 
-| Secret | Value |
-| --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account ID that owns the Worker and configured bindings. |
-| `CLOUDFLARE_API_TOKEN` | A Cloudflare user API token for non-interactive Wrangler deployment. |
+| Type | Name | Value |
+| --- | --- | --- |
+| Repository variable | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account ID that owns the Worker and configured bindings. |
+| Repository secret | `CLOUDFLARE_API_TOKEN` | A Cloudflare user API token for non-interactive Wrangler deployment. |
+
+`CLOUDFLARE_ACCOUNT_ID` is not sensitive. Store it as a GitHub Actions repository variable so the CD workflow can pass it
+to Wrangler as `vars.CLOUDFLARE_ACCOUNT_ID`. Keep only `CLOUDFLARE_API_TOKEN` in GitHub Actions repository secrets.
 
 Create the API token from the Cloudflare dashboard's account API tokens page. Use the **Edit Cloudflare Workers** custom
 permission template as the baseline, then scope resources as narrowly as possible:
