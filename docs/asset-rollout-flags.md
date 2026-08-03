@@ -13,9 +13,25 @@ The flags below affect only `GET /assets/:assetId` and `POST /assets/batch`. Ico
 | --- | --- | --- | --- |
 | `use-asset-delivery-v2` | Selects the Roblox asset-delivery protocol used to resolve a requested asset. | Uses the established Roblox v1 asset-delivery request path and a v1 canonical cache key. | Uses Roblox v2 discovery, follows the first valid HTTPS location, forwards only allowlisted representation-affecting inputs, and varies the cache key by those inputs. |
 | `asset-cache-hit-exempt-limit` | Moves client rate limiting from every asset request to only cold miss resolution work. | The Worker applies `ASSET_PROXY_RATE_LIMITER` before route handling for every `/assets/` request, including cache hits. | Cache hits bypass the client rate-limit check. Cold misses still call `ASSET_PROXY_RATE_LIMITER` before contacting Roblox or the coordinator. A batch performs one lazy limit decision for its unique misses. |
-| `asset-cache-layered` | Enables the layered asset cache lifecycle on top of KV. | The Worker reads KV only. Fresh KV hits return `X-Cache-Status: hit`; stale KV entries are treated as misses and refetched before responding. | The Worker checks `caches.default` as an L1 cache, returns `l1-hit` for fresh L1 bytes, returns `kv-fresh-hit` for fresh KV bytes and repopulates L1, and returns `stale-hit` for stale KV bytes while refreshing in the background. |
-| `asset-upstream-coordinator` | Routes cache misses through the `ASSET_RESOLUTION_COORDINATOR` Durable Object. | Each cache miss resolves directly from Roblox in the request handler. | Misses go through a shard-selected Durable Object that coalesces same-key concurrent work, rechecks KV, and centralizes upstream retry and cooldown state. |
-| `asset-upstream-backpressure` | Enables coordinator admission control and retry behavior for upstream protection. | The coordinator still coalesces requests when `asset-upstream-coordinator` is enabled, but does not acquire permits, queue callers, rate permits, enter cooldown, or retry transient upstream responses. | The coordinator enforces permits, queue limits, permit spacing, persisted cooldown after upstream `429`, and one retry for retryable upstream failures when the request deadline allows it. Requires `ASSET_COORDINATOR_BUDGET_VERIFIED=true`; otherwise coordinated misses return `503` with `Retry-After: 60`. |
+| `asset-cache-layered` | Enables the layered asset cache lifecycle on top of KV. | The Worker reads KV only. Fresh KV hits return `X-Cache-Status: hit`; stale KV entries are treated as misses and refetched before responding. | The Worker checks `caches.default` as an L1 cache, returns `l1-hit` for fresh L1 bytes, returns `kv-fresh-hit` for fresh KV bytes and repopulates L1, and returns `stale-hit` for stale KV bytes while refreshing in the background through `ASSET_RESOLUTION_COORDINATOR`. |
+| `asset-upstream-coordinator` | Routes foreground cold misses through the `ASSET_RESOLUTION_COORDINATOR` Durable Object. | Foreground cold misses resolve directly from Roblox in the request handler. Stale background refreshes still use the Durable Object when `asset-cache-layered` is enabled. | Foreground cold misses go through a shard-selected Durable Object that coalesces same-key concurrent work, rechecks KV, and centralizes upstream retry and cooldown state. |
+| `asset-upstream-backpressure` | Enables coordinator admission control and retry behavior for upstream protection. | The coordinator still coalesces requests when used, but does not acquire permits, queue callers, rate permits, enter cooldown, or retry transient upstream responses. | The coordinator enforces permits, queue limits, permit spacing, persisted cooldown after upstream `429`, and one retry for retryable upstream failures when the request deadline allows it. Requires both `asset-upstream-coordinator` and `ASSET_COORDINATOR_BUDGET_VERIFIED=true`; otherwise foreground coordinated misses return `503` with `Retry-After: 60`, and stale refreshes run through the coordinator without backpressure. |
+
+## Coordinator traffic
+
+Foreground cold miss:
+
+- `asset-upstream-coordinator` off -> direct Roblox
+- `asset-upstream-coordinator` on -> Durable Object
+
+Background stale refresh:
+
+- always -> Durable Object for distributed single-flight coalescing
+
+Stale refresh backpressure is enabled only when both `asset-upstream-coordinator` and `asset-upstream-backpressure` are
+enabled. Enabling `asset-cache-layered` can therefore create Durable Object requests for stale background refreshes before
+foreground coordinator rollout. This has Durable Object operational and billing impact, while
+`asset-upstream-coordinator` still controls foreground cold-miss routing.
 
 ## Rollout order
 
@@ -36,7 +52,7 @@ These `wrangler.jsonc` vars are not Flagship flags, but they tune the flagged as
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `ASSET_COORDINATOR_BUDGET_VERIFIED` | `false` | Safety gate for `asset-upstream-backpressure`. Keep this `false` until Roblox quota identity and aggregate shard capacity are verified. |
-| `ASSET_COORDINATOR_SHARDS` | `16` | Number of Durable Object shards used by `asset-upstream-coordinator`. The client hashes each canonical cache key and selects `asset-shard-<n>`. |
+| `ASSET_COORDINATOR_SHARDS` | `16` | Number of Durable Object shards used by foreground coordination and stale background refresh coalescing. The client hashes each canonical cache key and selects `asset-shard-<n>`. |
 | `ASSET_COORDINATOR_CONCURRENCY` | `1` | Maximum active upstream resolutions per coordinator shard when backpressure is enabled. |
 | `ASSET_COORDINATOR_QUEUE_LIMIT` | `32` | Maximum queued waiters per coordinator shard when backpressure is enabled. A full queue returns `503` with `Retry-After`. |
 | `ASSET_COORDINATOR_PERMIT_INTERVAL_MS` | `1000` | Minimum spacing between upstream permits per coordinator shard when backpressure is enabled. |

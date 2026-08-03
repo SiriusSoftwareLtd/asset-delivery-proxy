@@ -11,8 +11,8 @@ A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. I
 - Rejects malformed asset IDs and requests that do not opt into secure mode.
 - Supports Roblox Asset Delivery v1 and an opt-in v2 path controlled by Cloudflare Flagship.
 - Uses the Cache API for fresh, data-center-local bytes and Workers KV as the authoritative seven-day cache.
-- Serves positive entries as fresh for 24 hours, then stale while a background refresh runs; 404 responses remain negatively cached for five minutes.
-- Coalesces identical cold resolutions and applies bounded upstream admission through hash-sharded Durable Objects.
+- Serves positive entries as fresh for 24 hours, then stale while a Durable Object-coalesced background refresh runs; 404 responses remain negatively cached for five minutes.
+- Coalesces identical cold resolutions and applies bounded upstream admission through hash-sharded Durable Objects when the foreground coordinator rollout is enabled.
 - Preserves the upstream content type and returns a detected `X-Asset-Extension` when available.
 - Emits structured logs, request IDs, cache-status headers, and tracing attributes.
 
@@ -109,7 +109,7 @@ The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). See
 [`docs/runtime-configuration.md`](./docs/runtime-configuration.md) for the complete bindings, vars, secrets, and
 billing-impact reference.
 
-Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding path without changing public routes. See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete flag map.
+Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. `asset-upstream-coordinator` controls foreground cold-miss Durable Object routing, but stale background refreshes use `ASSET_RESOLUTION_COORDINATOR` once `asset-cache-layered` is enabled. Stale-refresh backpressure requires both `asset-upstream-coordinator` and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding foreground path without changing public routes. See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete flag map.
 
 Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc`
 with identifiers from your account. Do not commit credentials or API tokens. Store `ROBLOX_API_KEY` with Wrangler secrets:

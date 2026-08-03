@@ -2,11 +2,17 @@ import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:
 import { describe, expect, test, vi } from 'vitest';
 import sourceWorker from '../src';
 import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
+import type { AssetResolutionResult } from '../src/types/app';
 import worker from './worker';
 
 type StoredValue = {
   value: ArrayBuffer;
   metadata?: unknown;
+};
+type AnalyticsPoint = {
+  blobs?: string[];
+  doubles?: number[];
+  indexes?: string[];
 };
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
@@ -43,12 +49,14 @@ function createTestEnv(
   options: {
     enabledFlags?: string[];
     rateLimit?: () => Promise<{ success: boolean }>;
+    assetMetrics?: { writeDataPoint: (point: AnalyticsPoint) => void };
   } = {},
 ): CloudflareBindings {
   return {
     ...env,
     ROBLOX_API_KEY: '',
     assetCache,
+    ASSET_METRICS: options.assetMetrics,
     ASSET_PROXY_RATE_LIMITER: {
       limit: options.rateLimit ?? (async () => ({ success: true })),
     },
@@ -60,6 +68,14 @@ function createTestEnv(
       },
     },
   } as unknown as CloudflareBindings;
+}
+
+function fakeCoordinator(result: AssetResolutionResult): CloudflareBindings['ASSET_RESOLUTION_COORDINATOR'] {
+  return {
+    getByName: () => ({
+      resolve: async () => result,
+    }),
+  } as unknown as CloudflareBindings['ASSET_RESOLUTION_COORDINATOR'];
 }
 
 function request(assetId: string, init: RequestInit = {}) {
@@ -459,6 +475,74 @@ describe('asset delivery rollout', () => {
     expect(response.headers.get('Retry-After')).toBe('17');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(cache.values.size).toBe(0);
+    fetchMock.mockRestore();
+  });
+
+  test('reports a coordinator fresh KV recheck as a cache hit metric', async () => {
+    const timestamp = Date.now();
+    const metricWrites: AnalyticsPoint[] = [];
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-cache-layered', 'asset-upstream-coordinator'],
+        assetMetrics: { writeDataPoint: (point) => metricWrites.push(point) },
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'asset',
+        status: 200,
+        data: new Uint8Array([8, 9]),
+        contentType: 'image/png',
+        extension: '.png',
+        timestamp,
+        attempts: 0,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'kv',
+      }),
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    const response = await worker.fetch(request('7251'), testEnv);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Cache-Status')).toBe('kv-fresh-hit');
+    expect(response.headers.get('X-Cache-Hit')).toBe('true');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([8, 9]));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(metricWrites).toHaveLength(1);
+    expect(metricWrites[0]?.blobs?.[0]).toBe('coordinator');
+    expect(metricWrites[0]?.blobs?.[1]).toBe('fresh-hit');
+    fetchMock.mockRestore();
+  });
+
+  test('reports a coordinator negative KV recheck as a negative cache hit metric', async () => {
+    const metricWrites: AnalyticsPoint[] = [];
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+        assetMetrics: { writeDataPoint: (point) => metricWrites.push(point) },
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'not-found',
+        status: 404,
+        error: 'Asset not found',
+        timestamp: Date.now(),
+        attempts: 0,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'kv',
+      }),
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    const response = await worker.fetch(request('7252'), testEnv);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('X-Cache-Status')).toBe('negative-hit');
+    expect(response.headers.get('X-Cache-Hit')).toBe('true');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(metricWrites).toHaveLength(1);
+    expect(metricWrites[0]?.blobs?.[0]).toBe('coordinator');
+    expect(metricWrites[0]?.blobs?.[1]).toBe('negative-hit');
     fetchMock.mockRestore();
   });
 

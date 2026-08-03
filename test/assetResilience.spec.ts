@@ -59,8 +59,12 @@ describe('asset resilience primitives', () => {
     const first = await stub.resolve({ identity, deadline: Date.now() + 10_000, backpressure: true });
     const second = await stub.resolve({ identity, deadline: Date.now() + 10_000, backpressure: true });
 
-    expect(first).toEqual(expect.objectContaining({ kind: 'error', status: 429, retryAfter: 5, attempts: 1 }));
-    expect(second).toEqual(expect.objectContaining({ kind: 'error', status: 429, retryAfter: 5, attempts: 0 }));
+    expect(first).toEqual(
+      expect.objectContaining({ kind: 'error', status: 429, retryAfter: 5, attempts: 1, origin: 'upstream' }),
+    );
+    expect(second).toEqual(
+      expect.objectContaining({ kind: 'error', status: 429, retryAfter: 5, attempts: 0, origin: 'admission' }),
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });
@@ -81,10 +85,33 @@ describe('asset resilience primitives', () => {
 
     const result = await stub.resolve({ identity, deadline: Date.now() + 5_000, backpressure: true });
 
-    expect(result).toEqual(expect.objectContaining({ kind: 'asset', status: 200, attempts: 2 }));
+    expect(result).toEqual(expect.objectContaining({ kind: 'asset', status: 200, attempts: 2, origin: 'upstream' }));
     expect(fetchMock).toHaveBeenCalledTimes(2);
     fetchMock.mockRestore();
     await env.assetCache.delete(identity.physicalKey);
+  });
+
+  test('marks an already-expired coordinator request as admission without fetching upstream', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+    await env.assetCache.delete(identity.physicalKey);
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`expired-${assetId}`);
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    const result = await stub.resolve({ identity, deadline: Date.now() - 1, backpressure: false });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: 'error',
+        status: 504,
+        error: 'Roblox asset delivery timed out',
+        attempts: 0,
+        origin: 'admission',
+      }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
   });
 
   test('expires a queued coordinator request before it receives a permit', async () => {
@@ -132,6 +159,7 @@ describe('asset resilience primitives', () => {
         status: 504,
         error: 'Roblox asset delivery timed out',
         attempts: 0,
+        origin: 'admission',
       }),
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);

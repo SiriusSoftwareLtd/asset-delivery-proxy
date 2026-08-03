@@ -238,6 +238,13 @@ function resolutionToDelivery(
   };
 }
 
+function metricCacheOutcome(cacheStatus: CacheStatus): string {
+  if (cacheStatus === 'hit' || cacheStatus === 'kv-fresh-hit' || cacheStatus === 'l1-hit') return 'fresh-hit';
+  if (cacheStatus === 'negative-hit') return 'negative-hit';
+  if (cacheStatus === 'stale-hit') return 'stale-hit';
+  return 'miss';
+}
+
 async function resolveMiss(
   c: AppContext,
   identity: AssetResolutionIdentity,
@@ -423,7 +430,7 @@ export async function fetchAsset(
         span.setAttribute('http.response.status_code', resolution.upstreamStatus);
       writeAssetMetric(c.env, {
         resolutionPath: coordinatorEnabled ? (resolution.joined ? 'coordinator-joined' : 'coordinator') : 'direct',
-        cacheOutcome: 'miss',
+        cacheOutcome: metricCacheOutcome(delivery.cacheStatus),
         protocol: identity.protocol,
         upstreamStatusClass:
           resolution.upstreamStatus === undefined ? 'none' : `${Math.floor(resolution.upstreamStatus / 100)}xx`,

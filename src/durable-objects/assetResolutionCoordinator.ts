@@ -46,6 +46,10 @@ function jitter(milliseconds: number): number {
   return Math.floor(milliseconds * (0.5 + random / 255));
 }
 
+function originForAttempts(attempts: number): AssetResolutionOrigin {
+  return attempts === 0 ? 'admission' : 'upstream';
+}
+
 export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings> {
   private readonly inFlight = new Map<string, Promise<AssetResolutionResult>>();
   private readonly queue: PermitWaiter[] = [];
@@ -125,7 +129,14 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     let queueTimeMs = 0;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       if (Date.now() >= request.deadline) {
-        return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs, 'upstream');
+        const attempts = attempt - 1;
+        return this.errorResult(
+          504,
+          'Roblox asset delivery timed out',
+          attempts,
+          queueTimeMs,
+          originForAttempts(attempts),
+        );
       }
 
       let permit: Permit = { queueTimeMs: 0 };
@@ -135,18 +146,32 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           permit = await this.acquirePermit(request.deadline);
           permitHeld = true;
         } catch (error) {
+          const attempts = attempt - 1;
           if (error instanceof PermitDeadlineError) {
-            return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs, 'upstream');
+            return this.errorResult(
+              504,
+              'Roblox asset delivery timed out',
+              attempts,
+              queueTimeMs,
+              originForAttempts(attempts),
+            );
           }
           if (error instanceof CooldownError) {
-            return this.errorResult(429, error.message, attempt - 1, queueTimeMs, 'upstream', error.retryAfter);
+            return this.errorResult(
+              429,
+              error.message,
+              attempts,
+              queueTimeMs,
+              originForAttempts(attempts),
+              error.retryAfter,
+            );
           }
           return this.errorResult(
             503,
             'Asset resolution queue is full',
-            attempt - 1,
+            attempts,
             queueTimeMs,
-            'admission',
+            originForAttempts(attempts),
             Math.max(1, Math.ceil(this.permitIntervalMs / 1_000)),
           );
         }
@@ -155,7 +180,14 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
 
       try {
         if (Date.now() >= request.deadline) {
-          return this.errorResult(504, 'Roblox asset delivery timed out', attempt - 1, queueTimeMs, 'upstream');
+          const attempts = attempt - 1;
+          return this.errorResult(
+            504,
+            'Roblox asset delivery timed out',
+            attempts,
+            queueTimeMs,
+            originForAttempts(attempts),
+          );
         }
         const resolution = await fetchRobloxAsset(
           request.identity.protocol,
