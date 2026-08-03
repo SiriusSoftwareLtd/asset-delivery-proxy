@@ -9,7 +9,7 @@ Cloudflare resources and replace the binding identifiers in `wrangler.jsonc` wit
 | --- | --- | --- | --- |
 | `assetCache` | Workers KV namespace | Asset and negative-response cache. | KV reads and writes are billable Cloudflare usage. More cache hits reduce Roblox upstream calls and Rate Limiting decisions, but successful asset writes store raw bytes and metadata. |
 | `ASSET_PROXY_RATE_LIMITER` | Workers Rate Limiting binding | Per-client request limiting. | Limit checks are runtime binding operations. With `asset-cache-hit-exempt-limit` enabled, cache hits avoid this binding and only cold misses consume checks. |
-| `ASSET_RESOLUTION_COORDINATOR` | Durable Object namespace | Per-key coalescing, admission, retry, and cooldown state. | Foreground cold misses create Durable Object requests only when `asset-upstream-coordinator` is enabled. Background stale refreshes always use this Durable Object when `asset-cache-layered` is enabled so refresh work is distributed and single-flight coalesced. Higher shard, queue, and concurrency settings can increase DO request volume and active duration. |
+| `ASSET_RESOLUTION_COORDINATOR` | Durable Object namespace | Per-key coalescing, admission, retry, and cooldown state. | Foreground cold misses create Durable Object requests only when `asset-upstream-coordinator` is enabled. Background stale refreshes use this Durable Object when `asset-cache-layered` is enabled so refresh work is distributed and single-flight coalesced, unless the budget gate rejects the refresh at admission first. Higher shard, queue, and concurrency settings can increase DO request volume and active duration. |
 | `ASSET_METRICS` | Analytics Engine dataset | Low-cardinality cache and resolution outcomes. | Each emitted datapoint contributes Analytics Engine ingest volume. Current Cloudflare docs state Workers Analytics Engine is not billed yet, but pricing is published ahead of future billing. |
 | `FLAGS` | Cloudflare Flagship binding | Controls protocol and resilience rollout flags. | Flag evaluations affect route behavior and can add provider-specific billing depending on the Cloudflare account/product terms. Flag failures fail closed to the `false` path. |
 
@@ -37,7 +37,10 @@ The checked-in numeric coordinator values are inert rollout defaults, not claime
 
 Foreground cold misses resolve directly from Roblox while `asset-upstream-coordinator` is disabled, and route through
 `ASSET_RESOLUTION_COORDINATOR` when it is enabled. Background stale refreshes are different: once `asset-cache-layered` is
-enabled, stale refresh work always goes through `ASSET_RESOLUTION_COORDINATOR` for distributed single-flight coalescing.
+enabled, stale refresh work goes through `ASSET_RESOLUTION_COORDINATOR` for distributed single-flight coalescing, except
+when the budget gate rejects it. With both `asset-upstream-coordinator` and `asset-upstream-backpressure` enabled and
+`ASSET_COORDINATOR_BUDGET_VERIFIED` not set to `true`, the refresh is rejected at admission before any Durable Object
+work starts. The stale response is still served, and no refresh runs.
 
 Backpressure on stale refreshes requires both `asset-upstream-coordinator` and `asset-upstream-backpressure`. Enabling
 `asset-upstream-backpressure` alone must not add stale-refresh permits, queues, cooldown admission, or retries. Enabling
