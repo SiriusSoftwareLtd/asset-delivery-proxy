@@ -17,6 +17,9 @@ import { resolveAssetExtension } from './extension';
 import { fetchRobloxAsset, parseRetryAfter } from './roblox';
 
 const ASSET_ID_PATTERN = /^\d{1,20}$/;
+const MAX_STALE_REFRESH_IN_FLIGHT = 1_024;
+
+const staleRefreshes = new Map<string, Promise<void>>();
 
 export type AssetDeliveryResult =
   | {
@@ -257,6 +260,33 @@ async function resolveMiss(
   };
 }
 
+function scheduleStaleRefresh(
+  c: AppContext,
+  identity: AssetResolutionIdentity,
+  coordinatorEnabled: boolean,
+  backpressureEnabled: boolean,
+): Promise<void> {
+  const existing = staleRefreshes.get(identity.canonicalKey);
+  if (existing) return existing;
+
+  if (staleRefreshes.size >= MAX_STALE_REFRESH_IN_FLIGHT) {
+    logEvent('warn', 'asset.cache.stale_refresh_capacity_exceeded', { requestId: c.get('requestId') }, c.env);
+    return Promise.resolve();
+  }
+
+  const refresh = resolveMiss(c, identity, coordinatorEnabled, backpressureEnabled, false).then(
+    () => undefined,
+    () => undefined,
+  );
+  staleRefreshes.set(identity.canonicalKey, refresh);
+  refresh.finally(() => {
+    if (staleRefreshes.get(identity.canonicalKey) === refresh) {
+      staleRefreshes.delete(identity.canonicalKey);
+    }
+  });
+  return refresh;
+}
+
 export async function fetchAsset(
   assetId: string,
   c: AppContext,
@@ -340,12 +370,7 @@ export async function fetchAsset(
           return cachedAssetResult(assetId, kv.entry, layeredCacheEnabled ? 'kv-fresh-hit' : 'hit');
         }
         if (layeredCacheEnabled) {
-          c.executionCtx.waitUntil(
-            resolveMiss(c, identity, coordinatorEnabled, backpressureEnabled, false).then(
-              () => undefined,
-              () => undefined,
-            ),
-          );
+          c.executionCtx.waitUntil(scheduleStaleRefresh(c, identity, coordinatorEnabled, backpressureEnabled));
           writeAssetMetric(c.env, {
             resolutionPath: 'kv',
             cacheOutcome: 'stale-hit',
