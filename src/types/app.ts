@@ -31,16 +31,6 @@ export type AppContext = Context<AppEnvironment, string, BlankInput>;
 
 export type CachedAssetMetadata =
   | {
-      kind: 'asset';
-      timestamp: number;
-      contentType: string;
-      extension?: string;
-      version?: 1;
-      storedAt?: number;
-      freshUntil?: number;
-      staleUntil?: number;
-    }
-  | {
       kind: 'not-found';
       timestamp: number;
     }

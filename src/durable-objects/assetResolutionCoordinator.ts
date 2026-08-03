@@ -94,9 +94,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
   }
 
   private async resolveUncoalesced(request: AssetCoordinatorRequest): Promise<AssetResolutionResult> {
-    const cached = await readKv(this.env.assetCache, request.identity, {
-      allowLegacy: Date.now() < Date.parse(this.env.ASSET_LEGACY_V1_READ_UNTIL),
-    });
+    const cached = await readKv(this.env.assetCache, request.identity);
     if (cached.kind === 'asset' && cached.entry.state === 'fresh') {
       return {
         kind: 'asset',

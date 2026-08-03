@@ -43,5 +43,3 @@ These `wrangler.jsonc` vars are not Flagship flags, but they tune the flagged as
 | `ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS` | `30` | Cooldown duration used when Roblox returns `429` without a usable `Retry-After` header. |
 | `ASSET_COORDINATOR_OPERATION_DEADLINE_MS` | `25000` | Request deadline passed to the coordinator for a miss resolution operation. |
 | `ASSET_COORDINATOR_RETRY_BASE_MS` | `250` | Base jittered delay before one retry of retryable upstream failures while backpressure is enabled. |
-| `ASSET_LEGACY_V1_READ_UNTIL` | `2026-09-01T00:00:00.000Z` | Cutoff for reading legacy bare v1 KV keys. All new writes use hashed canonical keys. |
-

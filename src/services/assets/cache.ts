@@ -52,32 +52,27 @@ export async function buildAssetResolutionIdentity(
   };
 }
 
-function currentMetadata(
-  metadata: CachedAssetMetadata,
-  now: number,
-  isLegacyKey: boolean,
-): CurrentCachedAssetMetadata | undefined {
-  if (metadata.kind !== 'asset' || typeof metadata.contentType !== 'string' || metadata.contentType.length === 0) {
+function currentMetadata(metadata: CachedAssetMetadata, now: number): CurrentCachedAssetMetadata | undefined {
+  if (
+    metadata.kind !== 'asset' ||
+    metadata.version !== 2 ||
+    typeof metadata.contentType !== 'string' ||
+    metadata.contentType.length === 0
+  ) {
     return undefined;
   }
   if (typeof metadata.timestamp !== 'number' || !Number.isFinite(metadata.timestamp)) return undefined;
 
-  const hasLifecycle =
-    metadata.storedAt !== undefined || metadata.freshUntil !== undefined || metadata.staleUntil !== undefined;
-  const storedAt = isLegacyKey && !hasLifecycle ? now : (metadata.storedAt ?? metadata.timestamp);
-  const freshUntil = metadata.freshUntil ?? storedAt + ASSET_FRESH_TTL_MS;
-  const staleUntil = metadata.staleUntil ?? storedAt + ASSET_RETENTION_TTL_SECONDS * 1_000;
-
   if (
-    typeof storedAt !== 'number' ||
-    typeof freshUntil !== 'number' ||
-    typeof staleUntil !== 'number' ||
-    !Number.isFinite(storedAt) ||
-    !Number.isFinite(freshUntil) ||
-    !Number.isFinite(staleUntil) ||
-    freshUntil < storedAt ||
-    staleUntil < freshUntil ||
-    staleUntil <= now
+    typeof metadata.storedAt !== 'number' ||
+    typeof metadata.freshUntil !== 'number' ||
+    typeof metadata.staleUntil !== 'number' ||
+    !Number.isFinite(metadata.storedAt) ||
+    !Number.isFinite(metadata.freshUntil) ||
+    !Number.isFinite(metadata.staleUntil) ||
+    metadata.freshUntil < metadata.storedAt ||
+    metadata.staleUntil < metadata.freshUntil ||
+    metadata.staleUntil <= now
   ) {
     return undefined;
   }
@@ -86,9 +81,9 @@ function currentMetadata(
     kind: 'asset',
     version: 2,
     timestamp: metadata.timestamp,
-    storedAt,
-    freshUntil,
-    staleUntil,
+    storedAt: metadata.storedAt,
+    freshUntil: metadata.freshUntil,
+    staleUntil: metadata.staleUntil,
     contentType: metadata.contentType,
     extension: metadata.extension,
   };
@@ -161,11 +156,10 @@ export async function populateL1(identity: AssetResolutionIdentity, entry: Asset
 
 async function readKvKey(
   assetCache: KVNamespace,
-  key: string,
+  identity: AssetResolutionIdentity,
   now: number,
-  isLegacyKey = false,
 ): Promise<AssetCacheRead> {
-  const cached = await assetCache.getWithMetadata<CachedAssetMetadata>(key, 'arrayBuffer');
+  const cached = await assetCache.getWithMetadata<CachedAssetMetadata>(identity.physicalKey, 'arrayBuffer');
   if (cached.value === null) return { kind: 'miss' };
   if (!cached.metadata) throw new TypeError('Cached asset metadata is missing');
 
@@ -176,7 +170,7 @@ async function readKvKey(
     return { kind: 'not-found', source: 'kv', timestamp: cached.metadata.timestamp };
   }
 
-  const metadata = currentMetadata(cached.metadata, now, isLegacyKey);
+  const metadata = currentMetadata(cached.metadata, now);
   if (!metadata || cached.value.byteLength === 0) throw new TypeError('Cached asset is invalid or expired');
   return {
     kind: 'asset',
@@ -192,13 +186,11 @@ async function readKvKey(
 export async function readKv(
   assetCache: KVNamespace,
   identity: AssetResolutionIdentity,
-  options: { allowLegacy?: boolean; onError?: (error: unknown) => void } = {},
+  options: { onError?: (error: unknown) => void } = {},
 ): Promise<AssetCacheRead> {
   const now = Date.now();
   try {
-    const current = await readKvKey(assetCache, identity.physicalKey, now);
-    if (current.kind !== 'miss' || !options.allowLegacy || identity.protocol !== 'v1') return current;
-    return await readKvKey(assetCache, identity.assetId, now, true);
+    return await readKvKey(assetCache, identity, now);
   } catch (error) {
     options.onError?.(error);
     try {

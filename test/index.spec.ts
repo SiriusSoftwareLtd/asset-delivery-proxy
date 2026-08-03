@@ -306,9 +306,19 @@ describe('asset delivery rollout', () => {
 
   test('batch returns ordered cache hit, upstream success, and negative-cache result', async () => {
     const cache = createCache();
-    cache.values.set('101', {
+    const cachedIdentity = await buildAssetResolutionIdentity('101', request('101'), false);
+    cache.values.set(cachedIdentity.physicalKey, {
       value: new Uint8Array([1, 2]).buffer,
-      metadata: { kind: 'asset', timestamp: 123, contentType: 'image/png', extension: '.png' },
+      metadata: {
+        kind: 'asset',
+        version: 2,
+        timestamp: 123,
+        storedAt: 123,
+        freshUntil: Date.now() + 60_000,
+        staleUntil: Date.now() + 120_000,
+        contentType: 'image/png',
+        extension: '.png',
+      },
     });
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')

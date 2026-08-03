@@ -336,7 +336,6 @@ export async function fetchAsset(
       }
 
       const kv = await readKv(c.env.assetCache, identity, {
-        allowLegacy: Date.now() < Date.parse(c.env.ASSET_LEGACY_V1_READ_UNTIL),
         onError: (error) =>
           logEvent('warn', 'asset.cache.read_failed', { requestId, assetId, ...getErrorFields(error) }, c.env),
       });
