@@ -35,9 +35,10 @@ function createTestEnv(
     enabledFlags?: string[];
     rateLimit?: () => Promise<{ success: boolean }>;
   } = {},
-) {
+): CloudflareBindings {
   return {
     ...env,
+    ROBLOX_API_KEY: '',
     assetCache,
     ASSET_PROXY_RATE_LIMITER: {
       limit: options.rateLimit ?? (async () => ({ success: true })),
@@ -96,12 +97,7 @@ describe('asset delivery rollout', () => {
     const cache = createCache();
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(
-        Response.json({
-          locations: [{ location: 'https://cdn.test/asset-202' }],
-          assetTypeId: 9,
-        }),
-      )
+      .mockResolvedValueOnce(Response.json({ location: 'https://cdn.test/asset-202', assetTypeId: 9 }))
       .mockResolvedValueOnce(
         new Response(new Uint8Array([4, 5]), {
           headers: { 'Content-Type': 'model/gltf-binary' },
@@ -174,12 +170,13 @@ describe('asset delivery rollout', () => {
     const response = await worker.fetch(request('706'), testEnv);
 
     expect(response.status).toBe(200);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://apis.roblox.com/asset-delivery-api/v1/assetId/706');
     const assetRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(assetRequest.headers).get('x-api-key')).toBe('session-token');
     fetchMock.mockRestore();
   });
 
-  test('authenticates v2 discovery and asset download without dropping allowlisted headers', async () => {
+  test('authenticates v2 discovery through Open Cloud without dropping allowlisted headers', async () => {
     const cache = createCache();
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
@@ -193,12 +190,32 @@ describe('asset delivery rollout', () => {
     const response = await worker.fetch(new Request(incoming.url, { headers }), testEnv);
 
     expect(response.status).toBe(200);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://apis.roblox.com/asset-delivery-api/v1/assetId/707');
     const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const discoveryHeaders = new Headers(discoveryRequest.headers);
     expect(discoveryHeaders.get('Roblox-Place-Id')).toBe('42');
     expect(discoveryHeaders.get('x-api-key')).toBe('session-token');
     const locationRequest = fetchMock.mock.calls[1]?.[1] as RequestInit;
-    expect(new Headers(locationRequest?.headers).get('x-api-key')).toBe('session-token');
+    const locationHeaders = new Headers(locationRequest?.headers);
+    expect(locationHeaders.get('Roblox-Place-Id')).toBe('42');
+    expect(locationHeaders.has('x-api-key')).toBe(false);
+    fetchMock.mockRestore();
+  });
+
+  test('accepts authenticated Open Cloud asset bytes without discovery JSON', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([11, 12]), { headers: { 'Content-Type': 'image/png' } }));
+
+    const response = await worker.fetch(request('709'), {
+      ...createTestEnv(true, createCache()),
+      ROBLOX_API_KEY: 'session-token',
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Asset-Extension')).toBe('.png');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([11, 12]));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });
 

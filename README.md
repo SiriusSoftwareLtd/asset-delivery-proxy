@@ -123,7 +123,9 @@ Legacy bare v1 KV keys are read only until `ASSET_LEGACY_V1_READ_UNTIL`; all new
 
 Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc` with identifiers from your account. Do not commit credentials or API tokens. Store sensitive runtime values with Wrangler secrets instead:
 
-`ROBLOX_API_KEY` is sent as the `x-api-key` header on Roblox v1 requests and on both the discovery and returned asset-download requests for v2. When the secret is empty or unavailable, the header is omitted.
+`ROBLOX_API_KEY` is sent as the `x-api-key` header to Roblox's authenticated Open Cloud asset-delivery endpoint.
+Configure an actual Open Cloud API key in `ROBLOX_API_KEY`. Authentication headers are not forwarded to returned signed
+asset-download locations.
 
 ```sh
 pnpm exec wrangler secret put YOUR_SECRET_NAME
