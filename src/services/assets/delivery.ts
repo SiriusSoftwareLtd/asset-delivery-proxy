@@ -220,7 +220,7 @@ function resolutionToDelivery(
       timestamp: result.timestamp,
       upstreamStatus: result.upstreamStatus,
       cacheStatus,
-      cacheHit: result.attempts === 0,
+      cacheHit: result.origin === 'kv',
     };
   }
   return {
@@ -234,7 +234,7 @@ function resolutionToDelivery(
     upstreamStatus: result.upstreamStatus,
     retryAfter: result.retryAfter,
     cacheStatus,
-    cacheHit: result.attempts === 0,
+    cacheHit: result.origin === 'kv',
   };
 }
 

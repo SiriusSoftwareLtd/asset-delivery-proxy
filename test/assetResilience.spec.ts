@@ -41,7 +41,7 @@ describe('asset resilience primitives', () => {
     expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
     expect(results.filter((result) => result.joined).length).toBeGreaterThan(0);
     expect(results.filter((result) => !result.joined && result.attempts === 1)).toHaveLength(1);
-    expect(results.filter((result) => result.joined || result.attempts === 0)).toHaveLength(99);
+    expect(results.filter((result) => result.joined || result.origin === 'kv')).toHaveLength(99);
     fetchMock.mockRestore();
     await env.assetCache.delete(identity.physicalKey);
   });
