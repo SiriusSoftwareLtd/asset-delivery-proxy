@@ -15,7 +15,7 @@ The flags below affect only `GET /assets/:assetId` and `POST /assets/batch`. Ico
 | `asset-cache-hit-exempt-limit` | Moves client rate limiting from every asset request to only cold miss resolution work. | The Worker applies `ASSET_PROXY_RATE_LIMITER` before route handling for every `/assets/` request, including cache hits. | Cache hits bypass the client rate-limit check. Cold misses still call `ASSET_PROXY_RATE_LIMITER` before contacting Roblox or the coordinator. A batch performs one lazy limit decision for its unique misses. |
 | `asset-cache-layered` | Enables the layered asset cache lifecycle on top of KV. | The Worker reads KV only. Fresh KV hits return `X-Cache-Status: hit`; stale KV entries are treated as misses and refetched before responding. | The Worker checks `caches.default` as an L1 cache, returns `l1-hit` for fresh L1 bytes, returns `kv-fresh-hit` for fresh KV bytes and repopulates L1, and returns `stale-hit` for stale KV bytes while refreshing in the background through `ASSET_RESOLUTION_COORDINATOR`. |
 | `asset-upstream-coordinator` | Routes foreground cold misses through the `ASSET_RESOLUTION_COORDINATOR` Durable Object. | Foreground cold misses resolve directly from Roblox in the request handler. Stale background refreshes still use the Durable Object when `asset-cache-layered` is enabled. | Foreground cold misses go through a shard-selected Durable Object that coalesces same-key concurrent work, rechecks KV, and centralizes upstream retry and cooldown state. |
-| `asset-upstream-backpressure` | Enables coordinator admission control and retry behavior for upstream protection. | The coordinator still coalesces requests when used, but does not acquire permits, queue callers, rate permits, enter cooldown, or retry transient upstream responses. | The coordinator enforces permits, queue limits, permit spacing, persisted cooldown after upstream `429`, and one retry for retryable upstream failures when the request deadline allows it. Requires both `asset-upstream-coordinator` and `ASSET_COORDINATOR_BUDGET_VERIFIED=true`; otherwise foreground coordinated misses return `503` with `Retry-After: 60`, and stale refreshes run through the coordinator without backpressure. |
+| `asset-upstream-backpressure` | Enables coordinator admission control and retry behavior for upstream protection. | The coordinator still coalesces requests when used, but does not acquire permits, queue callers, rate permits, enter cooldown, or retry transient upstream responses. | The coordinator enforces permits, queue limits, permit spacing, persisted cooldown after upstream `429`, and one retry for retryable upstream failures when the request deadline allows it. Requires both `asset-upstream-coordinator` and `ASSET_COORDINATOR_BUDGET_VERIFIED=true`; otherwise foreground coordinated misses return `503` with `Retry-After: 60`. Stale refreshes run through the coordinator without backpressure only when `asset-upstream-coordinator` is off; when both flags are on but the budget is unverified, the stale response is served and the background refresh is rejected before Durable Object work starts. |
 
 ## Coordinator traffic
 
@@ -28,10 +28,10 @@ Background stale refresh:
 
 - always -> Durable Object for distributed single-flight coalescing
 
-Stale refresh backpressure is enabled only when both `asset-upstream-coordinator` and `asset-upstream-backpressure` are
-enabled. Enabling `asset-cache-layered` can therefore create Durable Object requests for stale background refreshes before
-foreground coordinator rollout. This has Durable Object operational and billing impact, while
-`asset-upstream-coordinator` still controls foreground cold-miss routing.
+Stale refresh backpressure is enabled only when `asset-upstream-coordinator`, `asset-upstream-backpressure`, and
+`ASSET_COORDINATOR_BUDGET_VERIFIED=true` are all in place. Enabling `asset-cache-layered` can therefore create Durable
+Object requests for stale background refreshes before foreground coordinator rollout. This has Durable Object operational
+and billing impact, while `asset-upstream-coordinator` still controls foreground cold-miss routing.
 
 ## Rollout order
 
