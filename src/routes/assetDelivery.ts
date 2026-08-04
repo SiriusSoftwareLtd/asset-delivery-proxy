@@ -1,6 +1,13 @@
 import { HTTPException } from 'hono/http-exception';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { errorResponse } from '../http/responses';
-import { type AssetDeliveryResult, fetchAsset, isValidAssetId } from '../services/assets/delivery';
+import {
+  type AssetDeliveryResult,
+  fetchAsset,
+  isValidAssetId,
+  prepareAssetIdentity,
+  shouldUseAssetDeliveryV2,
+} from '../services/assets/delivery';
 import type { AppContext } from '../types/app';
 import { bytesToBase64, mapWithConcurrency } from '../utils/batch';
 
@@ -20,6 +27,7 @@ function resultToResponse(c: AppContext, result: AssetDeliveryResult): Response 
       ...(result.extension ? { [ASSET_EXTENSION_HEADER]: result.extension } : {}),
       'X-Cache-Hit': result.cacheHit ? 'true' : 'false',
       'X-Cache-Status': result.cacheStatus,
+      ...(result.retryAfter !== undefined ? { 'Retry-After': result.retryAfter.toString() } : {}),
       ...(result.timestamp !== undefined ? { 'X-Cache-Timestamp': result.timestamp.toString() } : {}),
     });
   }
@@ -28,12 +36,17 @@ function resultToResponse(c: AppContext, result: AssetDeliveryResult): Response 
     return c.json({ error: result.error, requestId: c.get('requestId') }, 404, {
       'X-Cache-Hit': result.cacheHit ? 'true' : 'false',
       'X-Cache-Status': result.cacheStatus,
+      ...(result.retryAfter !== undefined ? { 'Retry-After': result.retryAfter.toString() } : {}),
       ...(result.timestamp !== undefined ? { 'X-Cache-Timestamp': result.timestamp.toString() } : {}),
     });
   }
 
-  if (result.status === 403) {
-    return errorResponse(c, result.error, 403);
+  if (result.data === undefined) {
+    const response = errorResponse(c, result.error, result.status as ContentfulStatusCode);
+    response.headers.set('X-Cache-Hit', 'false');
+    response.headers.set('X-Cache-Status', result.cacheStatus);
+    if (result.retryAfter !== undefined) response.headers.set('Retry-After', result.retryAfter.toString());
+    return response;
   }
 
   return new Response(result.data ?? new Uint8Array(), {
@@ -42,6 +55,7 @@ function resultToResponse(c: AppContext, result: AssetDeliveryResult): Response 
       ...(result.contentType ? { 'Content-Type': result.contentType } : {}),
       'X-Cache-Hit': 'false',
       'X-Cache-Status': result.cacheStatus,
+      ...(result.retryAfter !== undefined ? { 'Retry-After': result.retryAfter.toString() } : {}),
     },
   });
 }
@@ -77,12 +91,19 @@ export async function handleAssetBatchRequest(c: AppContext): Promise<Response> 
   }
 
   const assetIds = body.assetIds.filter(isValidAssetId);
+  const useAssetDeliveryV2 = await shouldUseAssetDeliveryV2(c);
+  const prepared = await Promise.all(
+    assetIds.map(async (assetId) => ({
+      assetId,
+      identity: await prepareAssetIdentity(assetId, c, c.req.raw, useAssetDeliveryV2),
+    })),
+  );
   const inFlight = new Map<string, Promise<AssetDeliveryResult>>();
-  const results = await mapWithConcurrency(assetIds, MAX_BATCH_CONCURRENCY, async (assetId) => {
-    let operation = inFlight.get(assetId);
+  const results = await mapWithConcurrency(prepared, MAX_BATCH_CONCURRENCY, async ({ assetId, identity }) => {
+    let operation = inFlight.get(identity.canonicalKey);
 
     if (!operation) {
-      operation = fetchAsset(assetId, c, c.req.raw).catch((error: unknown) => {
+      operation = fetchAsset(assetId, c, c.req.raw, identity).catch((error: unknown) => {
         const status = error instanceof HTTPException ? error.status : 500;
         return {
           assetId,
@@ -93,7 +114,7 @@ export async function handleAssetBatchRequest(c: AppContext): Promise<Response> 
           cacheHit: false,
         } satisfies AssetDeliveryResult;
       });
-      inFlight.set(assetId, operation);
+      inFlight.set(identity.canonicalKey, operation);
     }
 
     return assetResultToBatchItem(await operation);

@@ -1,0 +1,113 @@
+name: CD
+
+permissions:
+  contents: read
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  verify-current-main:
+    name: Verify Current Main Head
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'
+      }}
+    runs-on: ubuntu-latest
+
+    outputs:
+      should_deploy: ${{ steps.stale_sha_guard.outputs.should_deploy }}
+
+    steps:
+      - name: Guard Against Stale CI SHA
+        id: stale_sha_guard
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+
+          if [[ "${CI_HEAD_SHA}" == "${current_main_sha}" ]]; then
+            echo "should_deploy=true" >> "${GITHUB_OUTPUT}"
+            echo "CI SHA ${CI_HEAD_SHA} is current main; deployment may continue."
+          else
+            echo "should_deploy=false" >> "${GITHUB_OUTPUT}"
+            echo "CI SHA ${CI_HEAD_SHA} is stale; current main is ${current_main_sha}. Skipping deployment."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+
+  deploy:
+    name: Deploy Worker
+    needs: verify-current-main
+    if: needs.verify-current-main.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout Tested Commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          submodules: true
+
+      - name: Set Up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 11.18.0
+
+      - name: Set Up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Dependencies
+        run: pnpm ci
+
+      # Re-check immediately before deployment in case main advanced while
+      # dependencies were being installed.
+      - name: Verify Main Has Not Advanced
+        id: pre_deploy_guard
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha'
+          )"
+
+          if [[ "${CI_HEAD_SHA}" == "${current_main_sha}" ]]; then
+            echo "should_deploy=true" >> "${GITHUB_OUTPUT}"
+            echo "CI SHA ${CI_HEAD_SHA} is still current main."
+          else
+            echo "should_deploy=false" >> "${GITHUB_OUTPUT}"
+            echo "CI SHA ${CI_HEAD_SHA} is no longer current main; current main is ${current_main_sha}. Skipping deployment."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Deploy Worker
+        if: steps.pre_deploy_guard.outputs.should_deploy == 'true'
+        run: pnpm deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

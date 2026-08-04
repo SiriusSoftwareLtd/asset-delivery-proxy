@@ -1,4 +1,6 @@
 const ROBLOX_ASSET_DELIVERY_ORIGIN = 'https://assetdelivery.roblox.com';
+const ROBLOX_OPEN_CLOUD_ASSET_DELIVERY_ORIGIN = 'https://apis.roblox.com';
+const ROBLOX_TIMEOUT_MS = 10_000;
 
 /** Query parameters accepted by Roblox's v2 asset delivery endpoint. */
 export const ROBLOX_V2_QUERY_PARAMS = [
@@ -98,6 +100,28 @@ export function buildRobloxV1Url(assetId: string): string {
   return `${ROBLOX_ASSET_DELIVERY_ORIGIN}/v1/asset/?id=${encodeURIComponent(assetId)}`;
 }
 
+function buildOpenCloudAssetDeliveryUrl(protocol: 'v1' | 'v2', upstreamUrl: string): string | undefined {
+  const parsed = new URL(upstreamUrl);
+  const assetId =
+    protocol === 'v2'
+      ? parsed.pathname.match(/^\/v2\/assetId\/([^/]+)$/)?.[1]
+      : parsed.pathname === '/v1/asset/'
+        ? parsed.searchParams.get('id')
+        : undefined;
+
+  if (!assetId) return undefined;
+
+  const url = new URL(
+    `/asset-delivery-api/v1/assetId/${encodeURIComponent(decodeURIComponent(assetId))}`,
+    ROBLOX_OPEN_CLOUD_ASSET_DELIVERY_ORIGIN,
+  );
+  for (const [name, value] of parsed.searchParams) {
+    if (protocol === 'v1' && name === 'id') continue;
+    url.searchParams.append(name, value);
+  }
+  return url.toString();
+}
+
 /**
  * Builds the v2 discovery request and a stable cache-key suffix from only
  * the request fields Roblox documents for this endpoint.
@@ -142,20 +166,18 @@ export function getFirstRobloxV2Discovery(value: unknown): RobloxV2Discovery {
     throw rejection;
   }
 
-  const locations = (value as { locations?: unknown }).locations;
-  if (!Array.isArray(locations)) {
-    throw new MalformedRobloxV2ResponseError('Roblox v2 response has no locations');
-  }
+  const response = value as { location?: unknown; locations?: unknown; assetTypeId?: unknown };
+  const locations = typeof response.location === 'string' ? [response.location] : response.locations;
+  const candidates = Array.isArray(locations) ? locations : [];
 
-  for (const candidate of locations) {
-    if (!candidate || typeof candidate !== 'object') continue;
-    const location = (candidate as { location?: unknown }).location;
+  for (const candidate of candidates) {
+    const location = typeof candidate === 'string' ? candidate : (candidate as { location?: unknown })?.location;
     if (typeof location !== 'string' || location.length === 0) continue;
 
     try {
       const parsed = new URL(location);
       if (parsed.protocol === 'https:') {
-        const assetTypeId = (value as { assetTypeId?: unknown }).assetTypeId;
+        const assetTypeId = response.assetTypeId;
         return {
           location: parsed.toString(),
           assetTypeId: typeof assetTypeId === 'number' && Number.isInteger(assetTypeId) ? assetTypeId : undefined,
@@ -166,7 +188,7 @@ export function getFirstRobloxV2Discovery(value: unknown): RobloxV2Discovery {
     }
   }
 
-  throw new MalformedRobloxV2ResponseError('Roblox v2 response has no valid locations');
+  throw new MalformedRobloxV2ResponseError('Roblox v2 response has no valid location');
 }
 
 export async function parseRobloxV2Discovery(response: Response): Promise<RobloxV2Discovery> {
@@ -175,5 +197,105 @@ export async function parseRobloxV2Discovery(response: Response): Promise<Roblox
   } catch (error) {
     if (error instanceof MalformedRobloxV2ResponseError || error instanceof RobloxV2RejectedError) throw error;
     throw new MalformedRobloxV2ResponseError('Roblox v2 returned invalid JSON');
+  }
+}
+
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (value === null) return undefined;
+
+  const seconds = Number(value.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds);
+  }
+
+  const date = Date.parse(value);
+  if (!Number.isFinite(date) || date <= now) return undefined;
+  return Math.ceil((date - now) / 1_000);
+}
+
+export function isRetryableUpstreamStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+export type RobloxResolution =
+  | {
+      kind: 'response';
+      response: Response;
+      assetTypeId?: number;
+    }
+  | {
+      kind: 'rejection';
+      status: number;
+      error: string;
+      upstreamStatus?: number;
+      retryable: boolean;
+    };
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError');
+}
+
+function isJsonResponse(response: Response): boolean {
+  return response.headers.get('Content-Type')?.toLowerCase().includes('json') ?? false;
+}
+
+export async function fetchRobloxAsset(
+  protocol: 'v1' | 'v2',
+  upstreamUrl: string,
+  upstreamHeaders: Record<string, string>,
+  apiKey?: string,
+  deadline?: number,
+): Promise<RobloxResolution> {
+  try {
+    const headers = new Headers(upstreamHeaders);
+    const authenticatedUrl = apiKey ? buildOpenCloudAssetDeliveryUrl(protocol, upstreamUrl) : undefined;
+    if (apiKey) headers.set('x-api-key', apiKey);
+
+    const discoveryResponse = await fetch(authenticatedUrl ?? upstreamUrl, {
+      headers,
+      signal: AbortSignal.timeout(
+        Math.max(1, Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
+      ),
+    });
+
+    if (!discoveryResponse.ok) {
+      return { kind: 'response', response: discoveryResponse };
+    }
+
+    if (protocol === 'v1') {
+      return { kind: 'response', response: discoveryResponse };
+    }
+
+    if (authenticatedUrl && !isJsonResponse(discoveryResponse)) {
+      return { kind: 'response', response: discoveryResponse };
+    }
+
+    const discovery = await parseRobloxV2Discovery(discoveryResponse);
+    const response = await fetch(discovery.location, {
+      signal: AbortSignal.timeout(
+        Math.max(1, Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
+      ),
+      headers: upstreamHeaders,
+    });
+    return { kind: 'response', response, assetTypeId: discovery.assetTypeId };
+  } catch (error) {
+    if (error instanceof RobloxV2RejectedError) {
+      return {
+        kind: 'rejection',
+        status: rejectionStatus(error.upstreamCode),
+        error: error.message,
+        upstreamStatus: error.upstreamCode,
+        retryable: false,
+      };
+    }
+    if (error instanceof MalformedRobloxV2ResponseError) {
+      return { kind: 'rejection', status: 502, error: error.message, retryable: false };
+    }
+    return {
+      kind: 'rejection',
+      status: isTimeoutError(error) ? 504 : 502,
+      error: isTimeoutError(error) ? 'Roblox asset delivery timed out' : 'Unable to reach Roblox asset delivery',
+      retryable: true,
+    };
   }
 }

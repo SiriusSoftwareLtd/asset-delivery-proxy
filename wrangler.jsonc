@@ -6,12 +6,32 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "gen2-asset-delivery-proxy",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-03-10",
+	"compatibility_date": "2026-08-03",
 	"compatibility_flags": ["nodejs_compat"],
 	"kv_namespaces": [
 		{
 			"binding": "assetCache",
 			"id": "45592b2aefe14f9db19167adda87cbda",
+		},
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "ASSET_RESOLUTION_COORDINATOR",
+				"class_name": "AssetResolutionCoordinator",
+			},
+		],
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["AssetResolutionCoordinator"],
+		},
+	],
+	"analytics_engine_datasets": [
+		{
+			"binding": "ASSET_METRICS",
+			"dataset": "asset_delivery_metrics",
 		},
 	],
 	"ratelimits": [
@@ -43,6 +63,14 @@
 	},
 	"vars": {
 		"OBSERVABILITY_REPORT_LEVEL": "off",
+		"ASSET_COORDINATOR_BUDGET_VERIFIED": "false",
+		"ASSET_COORDINATOR_SHARDS": "16",
+		"ASSET_COORDINATOR_CONCURRENCY": "1",
+		"ASSET_COORDINATOR_QUEUE_LIMIT": "32",
+		"ASSET_COORDINATOR_PERMIT_INTERVAL_MS": "1000",
+		"ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS": "30",
+		"ASSET_COORDINATOR_OPERATION_DEADLINE_MS": "25000",
+		"ASSET_COORDINATOR_RETRY_BASE_MS": "250",
 	},
 	"secrets": {
 		"required": ["ROBLOX_API_KEY"],

@@ -1,6 +1,6 @@
 # Asset Delivery Proxy
 
-A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. It validates asset IDs, requires an explicit secure-mode header, caches successful and not-found responses in Workers KV, and applies Cloudflare rate limiting before contacting Roblox.
+A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. It validates asset IDs, requires an explicit secure-mode header, and uses layered edge and persistent caching with bounded upstream coordination.
 
 ## Features
 
@@ -10,7 +10,9 @@ A Cloudflare Worker that securely proxies Roblox asset downloads for Rayfield. I
 - Serves ordered batches of rendered provider icons from `POST /icon/batch`.
 - Rejects malformed asset IDs and requests that do not opt into secure mode.
 - Supports Roblox Asset Delivery v1 and an opt-in v2 path controlled by Cloudflare Flagship.
-- Caches assets and cache metadata in Workers KV; 404 responses are negatively cached for five minutes.
+- Uses the Cache API for fresh, data-center-local bytes and Workers KV as the authoritative seven-day cache.
+- Serves positive entries as fresh for 24 hours, then stale while a Durable Object-coalesced background refresh runs; 404 responses remain negatively cached for five minutes.
+- Coalesces identical cold resolutions and applies bounded upstream admission through hash-sharded Durable Objects when the foreground coordinator rollout is enabled.
 - Preserves the upstream content type and returns a detected `X-Asset-Extension` when available.
 - Emits structured logs, request IDs, cache-status headers, and tracing attributes.
 
@@ -45,9 +47,11 @@ Successful responses include the asset bytes and these useful headers:
 | --- | --- |
 | `X-Request-ID` | Request correlation ID. |
 | `X-Cache-Hit` | Whether the response was served from cache. |
-| `X-Cache-Status` | Cache outcome, such as `hit`, `miss`, or `negative-hit`. |
+| `X-Cache-Status` | Cache outcome, including `l1-hit`, `kv-fresh-hit`, `stale-hit`, `miss`, or `negative-hit`. |
 | `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or fetched response. |
 | `X-Asset-Extension` | Detected asset filename extension, when known. |
+
+Throttled and queue-rejected responses include `Retry-After`. With lazy miss limiting enabled, fresh, stale, and negative-cache hits do not consume the per-client Rate Limiting binding. A batch makes at most one client-limit decision after its cache lookups.
 
 ### Batch assets
 
@@ -63,7 +67,7 @@ The JSON body must contain between 1 and 25 decimal asset IDs (each up to 20 dig
 { "assetIds": ["101", "202"] }
 ```
 
-A valid batch returns `200` and preserves input order. Each successful item contains the asset bytes as base64 in `dataBase64`, along with `contentType`, an optional `extension`, `cacheStatus`, and `cacheHit`. Failed items contain their individual HTTP `status`, `cacheStatus`, `cacheHit`, and `error`; one item failing does not fail the whole batch. Malformed JSON, an invalid body, an empty or over-25 list, or an invalid asset ID returns `400`. Missing secure mode returns `403` before processing items. Batch processing allows at most six active asset operations at once.
+A valid batch returns `200` and preserves input order. Each successful item contains the asset bytes as base64 in `dataBase64`, along with `contentType`, an optional `extension`, `cacheStatus`, and `cacheHit`. Failed items contain their individual HTTP `status`, `cacheStatus`, `cacheHit`, and `error`; one item failing does not fail the whole batch. Malformed JSON, an invalid body, an empty or over-25 list, or an invalid asset ID returns `400`. Missing secure mode returns `403` before processing items. Batch processing allows at most six caller-side asset operations at once and groups duplicate canonical identities before coordinator admission.
 
 ### Icons
 
@@ -101,20 +105,26 @@ The supported options are `size`, Remix `category`, Font Awesome `style` (`brand
 
 ## Configuration and deployment
 
-The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). It requires these Cloudflare bindings:
+The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). See
+[`docs/runtime-configuration.md`](./docs/runtime-configuration.md) for the complete bindings, vars, secrets, and
+billing-impact reference.
 
-| Binding | Type | Purpose |
-| --- | --- | --- |
-| `assetCache` | Workers KV namespace | Asset and negative-response cache. |
-| `ASSET_PROXY_RATE_LIMITER` | Workers Rate Limiting binding | Per-client request limiting. |
-| `FLAGS` | Cloudflare Flagship binding | Enables the optional `use-asset-delivery-v2` flag. |
+Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. `asset-upstream-coordinator` controls foreground cold-miss Durable Object routing, but stale background refreshes use `ASSET_RESOLUTION_COORDINATOR` once `asset-cache-layered` is enabled, unless the budget gate rejects the refresh at admission before any Durable Object work starts. Stale-refresh backpressure requires both `asset-upstream-coordinator` and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding foreground path without changing public routes. See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete flag map.
 
-Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc` with identifiers from your account. Do not commit credentials or API tokens. Store sensitive runtime values with Wrangler secrets instead:
+Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc`
+with identifiers from your account. Do not commit credentials or API tokens. Store `ROBLOX_API_KEY` with Wrangler secrets:
 
 ```sh
-pnpm exec wrangler secret put YOUR_SECRET_NAME
+pnpm exec wrangler secret put ROBLOX_API_KEY
 pnpm deploy
 ```
+
+The CD workflow deploys the Worker from the `production` GitHub Actions environment after the `CI` workflow succeeds for a
+push to `main`, but only when that CI run's SHA is still the current `main` head. It verifies that condition before
+opening the deploy job and rechecks it immediately before `pnpm deploy` so a newer `main` commit cannot be overwritten by
+an older completed CI run. See
+[`docs/cd-secrets.md`](./docs/cd-secrets.md) for the required GitHub environment secret and Cloudflare API token
+permissions.
 
 Generate bindings types after changing `wrangler.jsonc`:
 
