@@ -93,4 +93,7 @@
 	"placement": {
 		"mode": "smart",
 	},
+	"limits": {
+		"cpu_ms": 1000
+	}
 }
