@@ -2,6 +2,7 @@ import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
 import { enterTraceSpan, parseReportLevel } from '../../middleware/observability';
 import { getErrorMessage, isTimeoutError } from '../../utils/errors';
+import { fetchWithTimeout } from '../../utils/fetch';
 import { readBoundedBody } from './body';
 import { MAX_SVG_BYTES, SVG_PREFIX_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 import { IconError } from './errors';
@@ -9,7 +10,6 @@ import { logIconEvent } from './observability';
 import { getSvgIconUrl } from './sources';
 import type { IconOperationContext, SvgIconConfig } from './types';
 import { validateSvgIconConfig } from './validation';
-import { fetchWithTimeout } from '../../utils/fetch';
 
 /*
  * Initialize once per Worker isolate. Individual requests await the same promise,
