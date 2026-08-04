@@ -91,8 +91,7 @@ export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<Arr
     const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
 
     /*
-     * Raw GitHub normally returns image/svg+xml, but text/plain and
-     * application/octet-stream are accepted for compatibility.
+     * Validate the content type when Raw GitHub supplies one.
      */
     if (contentType && contentType !== 'image/png') {
       throw new IconError('INVALID_CONTENT_TYPE', `Icon source returned ${contentType}`, {
