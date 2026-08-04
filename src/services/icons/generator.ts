@@ -2,6 +2,7 @@ import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
 import { enterTraceSpan, parseReportLevel } from '../../middleware/observability';
 import { getErrorMessage, isTimeoutError } from '../../utils/errors';
+import { readBoundedBody } from './body';
 import { MAX_SVG_BYTES, SVG_PREFIX_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 import { IconError } from './errors';
 import { logIconEvent } from './observability';
@@ -20,60 +21,18 @@ const wasmReady = initWasm(resvgWasm);
  * Content-Length header cannot force the Worker to buffer an unbounded body.
  */
 async function readSvgBody(response: Response): Promise<Uint8Array> {
-  const reader = response.body?.getReader();
-
-  if (!reader) {
-    throw new IconError('EMPTY_SVG', 'The upstream response did not contain a body', {
+  const content = await readBoundedBody(response, MAX_SVG_BYTES, () => {
+    return new IconError('SVG_TOO_LARGE', `SVG exceeds the ${MAX_SVG_BYTES}-byte limit`, {
       stage: 'upstream',
-      retryable: true,
+      retryable: false,
     });
-  }
+  });
 
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-
-  try {
-    while (true) {
-      const result = await reader.read();
-
-      if (result.done) {
-        break;
-      }
-
-      totalBytes += result.value.byteLength;
-
-      if (totalBytes > MAX_SVG_BYTES) {
-        try {
-          await reader.cancel();
-        } catch {
-          // The size error is more useful than a cancellation error.
-        }
-
-        throw new IconError('SVG_TOO_LARGE', `SVG exceeds the ${MAX_SVG_BYTES}-byte limit`, {
-          stage: 'upstream',
-          retryable: false,
-        });
-      }
-
-      chunks.push(result.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (totalBytes === 0) {
+  if (content.byteLength === 0) {
     throw new IconError('EMPTY_SVG', 'The upstream response contained an empty SVG', {
       stage: 'upstream',
       retryable: false,
     });
-  }
-
-  const content = new Uint8Array(totalBytes);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    content.set(chunk, offset);
-    offset += chunk.byteLength;
   }
 
   return content;

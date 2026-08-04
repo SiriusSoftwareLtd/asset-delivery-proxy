@@ -1,4 +1,5 @@
 import { isTimeoutError } from '../../utils/errors';
+import { readBoundedBody } from './body';
 import { MAX_PNG_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 import { IconError } from './errors';
 import { rawGitHubUrl } from './sources';
@@ -26,6 +27,15 @@ export function resolveRayfieldIconId(iconName: string): string | undefined {
 
 function getRayfieldIconUrlFromId(assetId: string): string {
   return rawGitHubUrl('SiriusSoftwareLtd', 'rayfield-gen2', 'main', 'assets', `${assetId}.png`);
+}
+
+async function readRayfieldPngBody(response: Response): Promise<Uint8Array<ArrayBuffer>> {
+  return readBoundedBody(response, MAX_PNG_BYTES, () => {
+    return new IconError('PNG_TOO_LARGE', `PNG exceeds the ${MAX_PNG_BYTES}-byte limit`, {
+      stage: 'upstream',
+      retryable: false,
+    });
+  });
 }
 
 export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<ArrayBuffer>> {
@@ -79,7 +89,7 @@ export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<Arr
       });
     }
 
-    return new Uint8Array(await response.arrayBuffer());
+    return readRayfieldPngBody(response);
   } catch (error) {
     if (error instanceof IconError) throw error;
 

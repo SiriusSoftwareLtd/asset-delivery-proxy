@@ -432,4 +432,27 @@ describe('icon delivery', () => {
     const response = await worker.fetch(batch, createTestEnv());
     expect(response.status).toBe(400);
   });
+  test('rejects an oversized Rayfield PNG without Content-Length', async () => {
+    const oversized = new Uint8Array(MAX_PNG_BYTES + 1);
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(oversized);
+        controller.close();
+      },
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, {
+        headers: { 'Content-Type': 'image/png' },
+      }),
+    );
+
+    const response = await worker.fetch(request('/icons/rayfield/check'), createTestEnv());
+
+    expect(response.status).toBe(502);
+    expect((await response.json<{ error: string }>()).error).toBe('Unable to generate icon');
+
+    fetchMock.mockRestore();
+  });
 });
