@@ -26,7 +26,9 @@ Foreground cold miss:
 
 Background stale refresh:
 
-- always -> Durable Object for distributed single-flight coalescing
+- `asset-upstream-coordinator` and `asset-upstream-backpressure` on, budget unverified -> rejected at admission, no
+  Durable Object work
+- otherwise -> Durable Object for distributed single-flight coalescing
 
 Stale refresh backpressure is enabled only when `asset-upstream-coordinator`, `asset-upstream-backpressure`, and
 `ASSET_COORDINATOR_BUDGET_VERIFIED=true` are all in place. Enabling `asset-cache-layered` can therefore create Durable
