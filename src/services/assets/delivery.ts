@@ -51,7 +51,11 @@ export type AssetDeliveryResult =
 
 async function evaluateFlag(c: AppContext, name: string, fallback = false): Promise<boolean> {
   try {
-    return await c.env.FLAGS.getBooleanValue(name, fallback);
+    const flagValue = await c.env.FLAGS.getBooleanValue(name, fallback, {
+      environment: c.env.ENVIRONMENT,
+    });
+
+    return flagValue;
   } catch (error) {
     logEvent(
       'warn',
@@ -119,31 +123,50 @@ async function resolveDirect(
   }
 
   const response = resolution.response;
-  const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
-  if (!response.ok) {
-    if (response.status === 404) {
-      const timestamp = Date.now();
-      await response.body?.cancel().catch(() => undefined);
-      let cacheStatus: CacheStatus = 'negative-write';
-      try {
-        await writeNotFoundToKv(c.env.assetCache, identity, timestamp);
-      } catch (error) {
-        cacheStatus = 'write-error';
-        logEvent(
-          'warn',
-          'asset.cache.negative_write_failed',
-          { requestId: c.get('requestId'), ...getErrorFields(error) },
-          c.env,
-        );
+  try {
+    const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
+    if (!response.ok) {
+      if (response.status === 404) {
+        const timestamp = Date.now();
+        await response.body?.cancel().catch(() => undefined);
+        let cacheStatus: CacheStatus = 'negative-write';
+        try {
+          await writeNotFoundToKv(c.env.assetCache, identity, timestamp);
+        } catch (error) {
+          cacheStatus = 'write-error';
+          logEvent(
+            'warn',
+            'asset.cache.negative_write_failed',
+            { requestId: c.get('requestId'), ...getErrorFields(error) },
+            c.env,
+          );
+        }
+        return {
+          cacheStatus,
+          result: {
+            kind: 'not-found',
+            status: 404,
+            error: 'Asset not found',
+            timestamp,
+            upstreamStatus: 404,
+            attempts: 1,
+            queueTimeMs: 0,
+            joined: false,
+            origin: 'upstream',
+          },
+        };
       }
+
       return {
-        cacheStatus,
+        cacheStatus: 'bypass',
         result: {
-          kind: 'not-found',
-          status: 404,
-          error: 'Asset not found',
-          timestamp,
-          upstreamStatus: 404,
+          kind: 'error',
+          status: response.status,
+          error: response.statusText || 'Roblox asset delivery failed',
+          data: new Uint8Array(await response.arrayBuffer()),
+          contentType,
+          upstreamStatus: response.status,
+          retryAfter: response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : undefined,
           attempts: 1,
           queueTimeMs: 0,
           joined: false,
@@ -152,56 +175,41 @@ async function resolveDirect(
       };
     }
 
+    const resolved = await resolveAssetExtension(contentType, response.body, resolution.assetTypeId);
+    const data = new Uint8Array(await new Response(resolved.body).arrayBuffer());
+    if (data.byteLength === 0) throw new HTTPException(502, { message: 'Roblox returned an empty asset' });
+    const timestamp = Date.now();
+    let cacheStatus: CacheStatus = 'miss';
+    try {
+      await writeAssetToKv(c.env.assetCache, identity, data, contentType, resolved.extension, timestamp);
+    } catch (error) {
+      cacheStatus = 'write-error';
+      logEvent(
+        'warn',
+        'asset.cache.write_failed',
+        { requestId: c.get('requestId'), assetBytes: data.byteLength, ...getErrorFields(error) },
+        c.env,
+      );
+    }
     return {
-      cacheStatus: 'bypass',
+      cacheStatus,
       result: {
-        kind: 'error',
-        status: response.status,
-        error: response.statusText || 'Roblox asset delivery failed',
-        data: new Uint8Array(await response.arrayBuffer()),
+        kind: 'asset',
+        status: 200,
+        data,
         contentType,
+        extension: resolved.extension,
+        timestamp,
         upstreamStatus: response.status,
-        retryAfter: response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : undefined,
         attempts: 1,
         queueTimeMs: 0,
         joined: false,
         origin: 'upstream',
       },
     };
+  } finally {
+    await resolution.cleanup();
   }
-
-  const resolved = await resolveAssetExtension(contentType, response.body, resolution.assetTypeId);
-  const data = new Uint8Array(await new Response(resolved.body).arrayBuffer());
-  if (data.byteLength === 0) throw new HTTPException(502, { message: 'Roblox returned an empty asset' });
-  const timestamp = Date.now();
-  let cacheStatus: CacheStatus = 'miss';
-  try {
-    await writeAssetToKv(c.env.assetCache, identity, data, contentType, resolved.extension, timestamp);
-  } catch (error) {
-    cacheStatus = 'write-error';
-    logEvent(
-      'warn',
-      'asset.cache.write_failed',
-      { requestId: c.get('requestId'), assetBytes: data.byteLength, ...getErrorFields(error) },
-      c.env,
-    );
-  }
-  return {
-    cacheStatus,
-    result: {
-      kind: 'asset',
-      status: 200,
-      data,
-      contentType,
-      extension: resolved.extension,
-      timestamp,
-      upstreamStatus: response.status,
-      attempts: 1,
-      queueTimeMs: 0,
-      joined: false,
-      origin: 'upstream',
-    },
-  };
 }
 
 function resolutionToDelivery(

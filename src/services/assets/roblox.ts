@@ -1,4 +1,5 @@
 import { isTimeoutError } from '../../utils/errors';
+import { fetchWithTimeout } from '../../utils/fetch';
 
 const ROBLOX_ASSET_DELIVERY_ORIGIN = 'https://assetdelivery.roblox.com';
 const ROBLOX_OPEN_CLOUD_ASSET_DELIVERY_ORIGIN = 'https://apis.roblox.com';
@@ -223,6 +224,7 @@ export type RobloxResolution =
   | {
       kind: 'response';
       response: Response;
+      cleanup: () => Promise<void>;
       assetTypeId?: number;
     }
   | {
@@ -249,33 +251,46 @@ export async function fetchRobloxAsset(
     const authenticatedUrl = apiKey ? buildOpenCloudAssetDeliveryUrl(protocol, upstreamUrl) : undefined;
     if (apiKey) headers.set('x-api-key', apiKey);
 
-    const discoveryResponse = await fetch(authenticatedUrl ?? upstreamUrl, {
-      headers,
-      signal: AbortSignal.timeout(
-        Math.max(1, Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
-      ),
-    });
+    const discoveryTimeoutMs = Math.max(
+      1,
+      Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now()),
+    );
 
+    const discoveryFetch = await fetchWithTimeout(authenticatedUrl ?? upstreamUrl, { headers }, discoveryTimeoutMs);
+    const discoveryResponse = discoveryFetch.response;
     if (!discoveryResponse.ok) {
-      return { kind: 'response', response: discoveryResponse };
+      return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
     }
 
-    if (protocol === 'v1') {
-      return { kind: 'response', response: discoveryResponse };
+    if (protocol === 'v1' && !authenticatedUrl) {
+      return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
     }
 
-    if (authenticatedUrl && !isJsonResponse(discoveryResponse)) {
-      return { kind: 'response', response: discoveryResponse };
+    if (protocol === 'v2' && authenticatedUrl && !isJsonResponse(discoveryResponse)) {
+      return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
     }
 
-    const discovery = await parseRobloxV2Discovery(discoveryResponse);
-    const response = await fetch(discovery.location, {
-      signal: AbortSignal.timeout(
-        Math.max(1, Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
-      ),
-      headers: upstreamHeaders,
-    });
-    return { kind: 'response', response, assetTypeId: discovery.assetTypeId };
+    let discovery: RobloxV2Discovery;
+
+    try {
+      discovery = await parseRobloxV2Discovery(discoveryResponse);
+    } finally {
+      await discoveryFetch.cleanup();
+    }
+
+    const assetTimeoutMs = Math.max(
+      1,
+      Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now()),
+    );
+
+    const assetFetch = await fetchWithTimeout(discovery.location, { headers: upstreamHeaders }, assetTimeoutMs);
+
+    return {
+      kind: 'response',
+      response: assetFetch.response,
+      cleanup: assetFetch.cleanup,
+      assetTypeId: discovery.assetTypeId,
+    };
   } catch (error) {
     if (error instanceof RobloxV2RejectedError) {
       return {

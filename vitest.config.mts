@@ -5,7 +5,13 @@ export default defineWorkersConfig({
     poolOptions: {
       workers: {
         wrangler: { configPath: './wrangler.jsonc' },
-      },
+        miniflare: {
+          bindings: {
+            ROBLOX_API_KEY: '',
+						ENVIRONMENT: 'test',
+          },
+        }
+			},
 		},
 		coverage: {
 			provider: 'istanbul',
@@ -16,7 +22,7 @@ export default defineWorkersConfig({
 		    branches: 70,
 		    statements: 70,
 			},
-			exclude: ["./scripts/verify-production.ts"]
+			exclude: ["scripts/verify-production.ts", "test/worker.ts"]
 		}
   },
 });

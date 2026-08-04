@@ -107,7 +107,9 @@ describe('icon delivery', () => {
   });
 
   test('returns 404 per item for non-existent icons in a batch request', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('missing', { status: 404 }));
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response('missing', { status: 404 }));
 
     const response = await worker.fetch(
       batchRequest({

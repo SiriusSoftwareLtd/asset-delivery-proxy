@@ -3,8 +3,11 @@ import { describe, expect, test, vi } from 'vitest';
 import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
 import { parseRetryAfter } from '../src/services/assets/roblox';
 
+let assetIdSequence = 0;
+
 function uniqueAssetId(): string {
-  return `${Date.now()}${Math.floor(Math.random() * 1_000)}`.slice(0, 20);
+  assetIdSequence += 1;
+  return `${Date.now()}${assetIdSequence.toString().padStart(4, '0')}`;
 }
 
 describe('asset resilience primitives', () => {
