@@ -87,9 +87,7 @@
 		{
 			"pattern": "proxy.sirius.menu",
 			"zone_name": "sirius.menu",
-			"custom_domain": true,
-			"enabled": true,
-			"previews_enabled": false,
+			"custom_domain": true
 		},
 	],
 	"placement": {
