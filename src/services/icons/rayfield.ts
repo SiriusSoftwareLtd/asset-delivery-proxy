@@ -54,7 +54,7 @@ async function readRayfieldPngBody(response: Response): Promise<Uint8Array<Array
 export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<ArrayBuffer>> {
   const url = getRayfieldIconUrlFromId(assetId);
   try {
-    const response = await fetchWithTimeout(
+    const upstream = await fetchWithTimeout(
       url,
       {
         headers: {
@@ -64,47 +64,53 @@ export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<Arr
       },
       UPSTREAM_TIMEOUT_MS,
     );
-    if (response.status === 404) {
-      throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
-        stage: 'upstream',
-        retryable: false,
-        upstreamStatus: 404,
-      });
-    }
-    if (!response.ok) {
-      throw new IconError('UPSTREAM_HTTP_ERROR', 'Failed to fetch icon', {
-        stage: 'upstream',
-        retryable: false,
-        upstreamStatus: response.status,
-      });
-    }
-    // check content length
-    const declaredLength = response.headers.get('content-length');
+    const response = upstream.response;
 
-    if (declaredLength !== null) {
-      const declaredBytes = Number(declaredLength);
+    try {
+      if (response.status === 404) {
+        throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
+          stage: 'upstream',
+          retryable: false,
+          upstreamStatus: 404,
+        });
+      }
+      if (!response.ok) {
+        throw new IconError('UPSTREAM_HTTP_ERROR', 'Failed to fetch icon', {
+          stage: 'upstream',
+          retryable: false,
+          upstreamStatus: response.status,
+        });
+      }
+      // check content length
+      const declaredLength = response.headers.get('content-length');
 
-      if (Number.isFinite(declaredBytes) && declaredBytes > MAX_PNG_BYTES) {
-        throw new IconError('PNG_TOO_LARGE', `PNG exceeds the ${MAX_PNG_BYTES}-byte limit`, {
+      if (declaredLength !== null) {
+        const declaredBytes = Number(declaredLength);
+
+        if (Number.isFinite(declaredBytes) && declaredBytes > MAX_PNG_BYTES) {
+          throw new IconError('PNG_TOO_LARGE', `PNG exceeds the ${MAX_PNG_BYTES}-byte limit`, {
+            stage: 'upstream',
+            retryable: false,
+          });
+        }
+      }
+
+      const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+
+      /*
+       * Validate the content type when Raw GitHub supplies one.
+       */
+      if (contentType && contentType !== 'image/png') {
+        throw new IconError('INVALID_CONTENT_TYPE', `Icon source returned ${contentType}`, {
           stage: 'upstream',
           retryable: false,
         });
       }
+
+      return readRayfieldPngBody(response);
+    } finally {
+      upstream.cleanup();
     }
-
-    const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
-
-    /*
-     * Validate the content type when Raw GitHub supplies one.
-     */
-    if (contentType && contentType !== 'image/png') {
-      throw new IconError('INVALID_CONTENT_TYPE', `Icon source returned ${contentType}`, {
-        stage: 'upstream',
-        retryable: false,
-      });
-    }
-
-    return readRayfieldPngBody(response);
   } catch (error) {
     if (error instanceof IconError) throw error;
 

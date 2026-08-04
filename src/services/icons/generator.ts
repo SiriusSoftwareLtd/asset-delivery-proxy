@@ -48,7 +48,7 @@ async function getSvgIconContent(iconConfig: SvgIconConfig, reportLevel: string)
       const url = getSvgIconUrl(iconConfig);
 
       try {
-        const response = await fetchWithTimeout(
+        const upstream = await fetchWithTimeout(
           url,
           {
             headers: {
@@ -58,65 +58,70 @@ async function getSvgIconContent(iconConfig: SvgIconConfig, reportLevel: string)
           },
           UPSTREAM_TIMEOUT_MS,
         );
+        const response = upstream.response;
 
-        span.setAttribute('http.status_code', response.status);
+        try {
+          span.setAttribute('http.status_code', response.status);
 
-        if (response.status === 404) {
-          throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
-            stage: 'upstream',
-            retryable: false,
-            upstreamStatus: response.status,
-          });
-        }
+          if (response.status === 404) {
+            throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
+              stage: 'upstream',
+              retryable: false,
+              upstreamStatus: response.status,
+            });
+          }
 
-        if (!response.ok) {
-          throw new IconError('UPSTREAM_HTTP_ERROR', `Icon source returned HTTP ${response.status}`, {
-            stage: 'upstream',
-            retryable: response.status === 429 || response.status >= 500,
-            upstreamStatus: response.status,
-          });
-        }
+          if (!response.ok) {
+            throw new IconError('UPSTREAM_HTTP_ERROR', `Icon source returned HTTP ${response.status}`, {
+              stage: 'upstream',
+              retryable: response.status === 429 || response.status >= 500,
+              upstreamStatus: response.status,
+            });
+          }
 
-        const declaredLength = response.headers.get('content-length');
+          const declaredLength = response.headers.get('content-length');
 
-        if (declaredLength !== null) {
-          const declaredBytes = Number(declaredLength);
+          if (declaredLength !== null) {
+            const declaredBytes = Number(declaredLength);
 
-          if (Number.isFinite(declaredBytes) && declaredBytes > MAX_SVG_BYTES) {
-            throw new IconError('SVG_TOO_LARGE', `SVG exceeds the ${MAX_SVG_BYTES}-byte limit`, {
+            if (Number.isFinite(declaredBytes) && declaredBytes > MAX_SVG_BYTES) {
+              throw new IconError('SVG_TOO_LARGE', `SVG exceeds the ${MAX_SVG_BYTES}-byte limit`, {
+                stage: 'upstream',
+                retryable: false,
+              });
+            }
+          }
+
+          const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+
+          /*
+           * Raw GitHub normally returns image/svg+xml, but text/plain and
+           * application/octet-stream are accepted for compatibility.
+           */
+          if (contentType && !['image/svg+xml', 'text/plain', 'application/octet-stream'].includes(contentType)) {
+            throw new IconError('INVALID_CONTENT_TYPE', `Icon source returned ${contentType}`, {
               stage: 'upstream',
               retryable: false,
             });
           }
+
+          const content = await readSvgBody(response);
+          const prefix = new TextDecoder().decode(content.subarray(0, Math.min(content.byteLength, SVG_PREFIX_BYTES)));
+
+          // Reject obvious non-SVG responses before invoking the renderer.
+          if (!/<svg(?:\s|>)/i.test(prefix)) {
+            throw new IconError('INVALID_SVG', 'The upstream response does not appear to contain SVG data', {
+              stage: 'upstream',
+              retryable: false,
+            });
+          }
+
+          span.setAttribute('svg.bytes', content.byteLength);
+
+          return content;
+        } finally {
+          upstream.cleanup();
         }
-
-        const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
-
-        /*
-         * Raw GitHub normally returns image/svg+xml, but text/plain and
-         * application/octet-stream are accepted for compatibility.
-         */
-        if (contentType && !['image/svg+xml', 'text/plain', 'application/octet-stream'].includes(contentType)) {
-          throw new IconError('INVALID_CONTENT_TYPE', `Icon source returned ${contentType}`, {
-            stage: 'upstream',
-            retryable: false,
-          });
-        }
-
-        const content = await readSvgBody(response);
-        const prefix = new TextDecoder().decode(content.subarray(0, Math.min(content.byteLength, SVG_PREFIX_BYTES)));
-
-        // Reject obvious non-SVG responses before invoking the renderer.
-        if (!/<svg(?:\s|>)/i.test(prefix)) {
-          throw new IconError('INVALID_SVG', 'The upstream response does not appear to contain SVG data', {
-            stage: 'upstream',
-            retryable: false,
-          });
-        }
-
-        span.setAttribute('svg.bytes', content.byteLength);
-
-        return content;
       } catch (error) {
         if (error instanceof IconError) {
           throw error;

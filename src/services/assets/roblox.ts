@@ -224,6 +224,7 @@ export type RobloxResolution =
   | {
       kind: 'response';
       response: Response;
+      cleanup: () => void;
       assetTypeId?: number;
     }
   | {
@@ -255,29 +256,41 @@ export async function fetchRobloxAsset(
       Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now()),
     );
 
-    const discoveryResponse = await fetchWithTimeout(authenticatedUrl ?? upstreamUrl, { headers }, discoveryTimeoutMs);
-
+    const discoveryFetch = await fetchWithTimeout(authenticatedUrl ?? upstreamUrl, { headers }, discoveryTimeoutMs);
+    const discoveryResponse = discoveryFetch.response;
     if (!discoveryResponse.ok) {
-      return { kind: 'response', response: discoveryResponse };
+      return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
     }
 
     if (protocol === 'v1' && !authenticatedUrl) {
-      return { kind: 'response', response: discoveryResponse };
+      return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
     }
 
     if (protocol === 'v2' && authenticatedUrl && !isJsonResponse(discoveryResponse)) {
-      return { kind: 'response', response: discoveryResponse };
+      return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
     }
 
-    const discovery = await parseRobloxV2Discovery(discoveryResponse);
+    let discovery: RobloxV2Discovery;
+
+    try {
+      discovery = await parseRobloxV2Discovery(discoveryResponse);
+    } finally {
+      discoveryFetch.cleanup();
+    }
+
     const assetTimeoutMs = Math.max(
       1,
       Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now()),
     );
 
-    const response = await fetchWithTimeout(discovery.location, { headers: upstreamHeaders }, assetTimeoutMs);
+    const assetFetch = await fetchWithTimeout(discovery.location, { headers: upstreamHeaders }, assetTimeoutMs);
 
-    return { kind: 'response', response, assetTypeId: discovery.assetTypeId };
+    return {
+      kind: 'response',
+      response: assetFetch.response,
+      cleanup: assetFetch.cleanup,
+      assetTypeId: discovery.assetTypeId,
+    };
   } catch (error) {
     if (error instanceof RobloxV2RejectedError) {
       return {

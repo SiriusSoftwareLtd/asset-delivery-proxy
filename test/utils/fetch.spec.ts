@@ -11,7 +11,7 @@ describe('fetchWithTimeout', () => {
     vi.useRealTimers();
   });
 
-  test('returns the fetch response when the request completes before the timeout', async () => {
+  test('returns the fetch response and keeps the timeout active until cleanup', async () => {
     const response = new Response('ok', { status: 200 });
     let signal: AbortSignal | null | undefined;
 
@@ -30,7 +30,7 @@ describe('fetchWithTimeout', () => {
       10_000,
     );
 
-    expect(result).toBe(response);
+    expect(result.response).toBe(response);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
       'https://example.com/asset',
@@ -43,10 +43,18 @@ describe('fetchWithTimeout', () => {
     );
 
     expect(signal?.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+
+    result.cleanup();
+
     expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(signal?.aborted).toBe(false);
   });
 
-  test('aborts the fetch when the timeout expires', async () => {
+  test('aborts the fetch when the timeout expires before a response is returned', async () => {
     let signal: AbortSignal | null | undefined;
 
     vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {
@@ -108,7 +116,7 @@ describe('fetchWithTimeout', () => {
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
 
-    await fetchWithTimeout(
+    const result = await fetchWithTimeout(
       'https://apis.roblox.com/asset-delivery-api/v1/assetId/123',
       {
         method: 'GET',
@@ -125,8 +133,13 @@ describe('fetchWithTimeout', () => {
       signal: expect.any(AbortSignal),
     });
 
+    expect(vi.getTimerCount()).toBe(1);
+
+    result.cleanup();
+
     expect(vi.getTimerCount()).toBe(0);
   });
+
   test('keeps the timeout active while the response body is streaming', async () => {
     let signal: AbortSignal | null | undefined;
 
@@ -150,16 +163,16 @@ describe('fetchWithTimeout', () => {
       return new Response(body);
     });
 
-    const response = await fetchWithTimeout('https://example.com/asset', {}, 10_000);
+    const result = await fetchWithTimeout('https://example.com/asset', {}, 10_000);
 
-    // fetch() has already resolved, but the body has not completed.
     expect(signal?.aborted).toBe(false);
     expect(vi.getTimerCount()).toBe(1);
 
-    const bodyRead = response.arrayBuffer();
+    const bodyRead = result.response.arrayBuffer();
 
     const rejection = expect(bodyRead).rejects.toMatchObject({
       name: 'TimeoutError',
+      message: 'The operation timed out',
     });
 
     await vi.advanceTimersByTimeAsync(10_000);
@@ -168,5 +181,32 @@ describe('fetchWithTimeout', () => {
 
     expect(signal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+
+    result.cleanup();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('cleanup is idempotent', async () => {
+    const response = new Response('ok');
+    let signal: AbortSignal | null | undefined;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      signal = init?.signal;
+      return response;
+    });
+
+    const result = await fetchWithTimeout('https://example.com/asset', {}, 10_000);
+
+    expect(vi.getTimerCount()).toBe(1);
+
+    result.cleanup();
+    result.cleanup();
+
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(signal?.aborted).toBe(false);
   });
 });
