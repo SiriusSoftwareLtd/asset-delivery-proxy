@@ -1,7 +1,8 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import {
   buildRobloxV1Url,
   buildRobloxV2Request,
+  fetchRobloxAsset,
   getFirstRobloxV2Discovery,
   parseRetryAfter,
 } from '../src/services/assets/roblox';
@@ -76,5 +77,52 @@ describe('Roblox asset delivery helpers', () => {
     expect(parseRetryAfter(null, now)).toBeUndefined();
     expect(parseRetryAfter('-1', now)).toBeUndefined();
     expect(parseRetryAfter('Tue, 04 Aug 2026 11:59:59 GMT', now)).toBeUndefined();
+  });
+
+  test('rewrites authenticated v1 requests to Open Cloud without forwarding the id query', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(null, {
+          status: 404,
+        }),
+    );
+
+    let cleanup: (() => Promise<void>) | undefined;
+
+    try {
+      const result = await fetchRobloxAsset(
+        'v1',
+        'https://assetdelivery.roblox.com/v1/asset/?id=123&foo=bar',
+        {},
+        'test-api-key',
+        Date.now() + 10_000,
+      );
+
+      if (result.kind !== 'response') {
+        throw new Error('Expected Roblox response result');
+      }
+
+      cleanup = result.cleanup;
+
+      expect(result.response.status).toBe(404);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const call = fetchMock.mock.calls[0];
+
+      if (!call) {
+        throw new Error('Expected Roblox fetch');
+      }
+
+      const [input, init] = call;
+
+      expect(String(input)).toBe('https://apis.roblox.com/asset-delivery-api/v1/assetId/123?foo=bar');
+
+      const headers = new Headers(init?.headers);
+
+      expect(headers.get('x-api-key')).toBe('test-api-key');
+    } finally {
+      await cleanup?.();
+      fetchMock.mockRestore();
+    }
   });
 });

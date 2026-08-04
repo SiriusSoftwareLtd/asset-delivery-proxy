@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { logCacheError, readKv, readL1 } from '../src/services/assets/cache';
+import { type AssetCacheEntry, logCacheError, populateL1, readKv, readL1 } from '../src/services/assets/cache';
 import type { AssetResolutionIdentity } from '../src/types/app';
 
 const identity: AssetResolutionIdentity = {
@@ -238,5 +238,94 @@ describe('asset cache validation', () => {
     } finally {
       matchMock.mockRestore();
     }
+  });
+
+  test('does not populate L1 from a stale cache entry', async () => {
+    const putMock = vi.spyOn(caches.default, 'put').mockImplementation(async () => {});
+
+    const now = Date.now();
+
+    const entry: AssetCacheEntry = {
+      data: new Uint8Array([1, 2, 3]),
+      state: 'stale',
+      metadata: {
+        kind: 'asset',
+        version: 2,
+        timestamp: now - 120_000,
+        storedAt: now - 120_000,
+        freshUntil: now - 60_000,
+        staleUntil: now + 60_000,
+        contentType: 'image/png',
+        extension: '.png',
+      },
+    };
+
+    try {
+      await populateL1(identity, entry);
+
+      expect(putMock).not.toHaveBeenCalled();
+    } finally {
+      putMock.mockRestore();
+    }
+  });
+
+  test('clamps an L1 cache TTL to one second and omits a missing extension', async () => {
+    const putMock = vi.spyOn(caches.default, 'put').mockImplementation(async () => {});
+
+    const now = Date.now();
+
+    const entry: AssetCacheEntry = {
+      data: new Uint8Array([4, 5, 6]),
+      state: 'fresh',
+      metadata: {
+        kind: 'asset',
+        version: 2,
+        timestamp: now,
+        storedAt: now,
+        freshUntil: now,
+        staleUntil: now + 60_000,
+        contentType: 'application/octet-stream',
+      },
+    };
+
+    try {
+      await populateL1(identity, entry);
+
+      expect(putMock).toHaveBeenCalledTimes(1);
+
+      const call = putMock.mock.calls[0];
+
+      if (!call) {
+        throw new Error('Expected L1 cache put');
+      }
+
+      const response = call[1];
+
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=1');
+
+      expect(response.headers.get('X-Asset-Extension')).toBeNull();
+      expect(response.headers.get('X-Asset-Content-Type')).toBe('application/octet-stream');
+    } finally {
+      putMock.mockRestore();
+    }
+  });
+
+  test('returns a valid negative-cache entry without deleting it', async () => {
+    const timestamp = Date.now();
+
+    const { namespace, deleteMock } = createKv(new ArrayBuffer(0), {
+      kind: 'not-found',
+      timestamp,
+    });
+
+    const result = await readKv(namespace, identity);
+
+    expect(result).toEqual({
+      kind: 'not-found',
+      source: 'kv',
+      timestamp,
+    });
+
+    expect(deleteMock).not.toHaveBeenCalled();
   });
 });

@@ -112,4 +112,43 @@ describe('worker', () => {
       error.mockRestore();
     }
   });
+
+  test('returns 500 when the global rate limiter binding throws', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv({
+        rateLimit: async () => {
+          throw new Error('rate limiter unavailable');
+        },
+      }),
+      OBSERVABILITY_REPORT_LEVEL: 'error',
+    } as unknown as CloudflareBindings;
+
+    try {
+      const response = await worker.fetch(request('/health'), testEnv);
+
+      expect(response.status).toBe(500);
+
+      const body = await response.json<{
+        error: string;
+        requestId?: string;
+      }>();
+
+      expect(body.error).toBe('Internal server error');
+
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'request.failed',
+          method: 'GET',
+          path: '/health',
+          status: 500,
+          errorName: 'Error',
+          errorMessage: 'rate limiter unavailable',
+        }),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });
