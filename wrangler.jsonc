@@ -8,6 +8,7 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-29",
 	"compatibility_flags": ["nodejs_compat"],
+	"minify": true,
 	"kv_namespaces": [
 		{
 			"binding": "assetCache",
