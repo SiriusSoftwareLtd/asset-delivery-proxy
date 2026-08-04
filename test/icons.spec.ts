@@ -85,15 +85,25 @@ describe('icon delivery', () => {
 
   test.each([
     '/icons/rayfield/missing',
+    '/icons/rayfield/constructor',
     '/icons/lucide/missing',
     '/icons/remix/missing?category=System',
     '/icons/hero/missing',
     '/icons/feather/missing',
     '/icons/font-awesome/missing',
-  ])('returns 404 for an unknown icons', async (path) => {
+  ])('returns 404 for an unknown icon %s', async (path) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('missing', { status: 404 }));
+
     const response = await worker.fetch(request(path), createTestEnv());
+
     expect(response.status).toBe(404);
     expect((await response.json<{ error: string }>()).error).toBe('Icon not found');
+
+    if (path.startsWith('/icons/rayfield/')) {
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+
+    fetchMock.mockRestore();
   });
 
   test('returns 404 per item for non-existent icons in a batch request', async () => {
@@ -196,6 +206,14 @@ describe('icon delivery', () => {
     [
       'oversized PNG',
       new Response(png, { headers: { 'Content-Type': 'image/png', 'Content-Length': String(MAX_PNG_BYTES + 1) } }),
+      502,
+      'Unable to generate icon',
+    ],
+    [
+      'empty PNG',
+      new Response(null, {
+        headers: { 'Content-Type': 'image/png' },
+      }),
       502,
       'Unable to generate icon',
     ],
