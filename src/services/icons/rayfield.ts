@@ -34,12 +34,20 @@ function getRayfieldIconUrlFromId(assetId: string): string {
 }
 
 async function readRayfieldPngBody(response: Response): Promise<Uint8Array<ArrayBuffer>> {
-  return readBoundedBody(response, MAX_PNG_BYTES, () => {
+  const content = await readBoundedBody(response, MAX_PNG_BYTES, () => {
     return new IconError('PNG_TOO_LARGE', `PNG exceeds the ${MAX_PNG_BYTES}-byte limit`, {
       stage: 'upstream',
       retryable: false,
     });
   });
+
+  if (content.byteLength === 0) {
+    throw new IconError('EMPTY_PNG', 'The PNG response is empty', {
+      stage: 'upstream',
+      retryable: false,
+    });
+  }
+  return content;
 }
 
 export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<ArrayBuffer>> {

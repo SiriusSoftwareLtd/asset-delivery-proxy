@@ -11,6 +11,7 @@ export type IconErrorCode =
   | 'UPSTREAM_HTTP_ERROR'
   | 'INVALID_CONTENT_TYPE'
   | 'EMPTY_SVG'
+  | 'EMPTY_PNG'
   | 'PNG_TOO_LARGE'
   | 'SVG_TOO_LARGE'
   | 'INVALID_SVG'
