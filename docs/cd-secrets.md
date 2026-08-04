@@ -3,8 +3,9 @@
 The CD workflow deploys the Worker from the `production` GitHub Actions environment after the `CI` workflow succeeds for a
 push to `main`, but only when that CI run's SHA is still the current `main` head. Older CI runs that complete after a
 newer `main` commit are skipped before deployment, and the deploy job rechecks the current `main` head immediately before
-running `pnpm deploy` to close the gap between admission and deployment. Configure these GitHub repository variables,
-environments, and secrets before enabling automated deployment:
+running `pnpm deploy` to close the gap between admission and deployment. A commit message that starts or ends with
+`[skip cd]` also skips the CD workflow's deployment gate. Configure these GitHub repository variables, environments, and
+secrets before enabling automated deployment:
 
 | Type | Name | Value |
 | --- | --- | --- |

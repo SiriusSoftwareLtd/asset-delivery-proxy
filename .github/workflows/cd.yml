@@ -33,6 +33,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          commit_message="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/commits/${CI_HEAD_SHA}" \
+              --jq '.commit.message'
+          )"
+          commit_subject="${commit_message%%$'\n'*}"
+
+          if [[
+            "${commit_message}" == "[skip cd]"* ||
+            "${commit_message}" == *"[skip cd]" ||
+            "${commit_subject}" == "[skip cd]"* ||
+            "${commit_subject}" == *"[skip cd]"
+          ]]; then
+            echo "should_deploy=false" >> "${GITHUB_OUTPUT}"
+            echo "CI SHA ${CI_HEAD_SHA} commit message requests skipping CD; skipping deployment."
+            exit 0
+          fi
+
           current_main_sha="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \

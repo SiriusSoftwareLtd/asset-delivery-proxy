@@ -141,7 +141,8 @@ unless `ASSET_PROXY_ALLOW_HTTP=true` is set for non-production testing. Optional
 The CD workflow deploys the Worker from the `production` GitHub Actions environment after the `CI` workflow succeeds for a
 push to `main`, but only when that CI run's SHA is still the current `main` head. It verifies that condition before
 opening the deploy job and rechecks it immediately before `pnpm deploy` so a newer `main` commit cannot be overwritten by
-an older completed CI run. See
+an older completed CI run. To intentionally skip automated deployment for a commit, put `[skip cd]` at the start or end of
+the commit message. See
 [`docs/cd-secrets.md`](./docs/cd-secrets.md) for the required GitHub environment secret and Cloudflare API token
 permissions.
 
