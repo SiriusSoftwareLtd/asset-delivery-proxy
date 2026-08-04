@@ -1240,4 +1240,263 @@ describe('asset delivery', () => {
 
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([51, 52, 53]));
   });
+
+  test('logs a corrupt KV read and recovers through upstream resolution', async () => {
+    const cache = createCache();
+    const assetRequest = request('7901');
+
+    const identity = await buildAssetResolutionIdentity('7901', assetRequest, false);
+
+    cache.values.set(identity.physicalKey, {
+      value: new Uint8Array([99]).buffer,
+      metadata: undefined,
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1, 2]), {
+          headers: {
+            'Content-Type': 'image/png',
+          },
+        }),
+    );
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv(false, cache),
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+    } as unknown as CloudflareBindings;
+
+    try {
+      const response = await worker.fetch(assetRequest, testEnv);
+
+      expect(response.status).toBe(200);
+
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2]));
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'asset.cache.read_failed',
+          assetId: '7901',
+          errorName: 'TypeError',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  test('serves a valid negative KV entry without contacting Roblox', async () => {
+    const cache = createCache();
+    const assetRequest = request('7902');
+
+    const identity = await buildAssetResolutionIdentity('7902', assetRequest, false);
+
+    const timestamp = Date.now();
+
+    cache.values.set(identity.physicalKey, {
+      value: new ArrayBuffer(0),
+      metadata: {
+        kind: 'not-found',
+        timestamp,
+      },
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    try {
+      const response = await worker.fetch(assetRequest, createTestEnv(false, cache));
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get('X-Cache-Hit')).toBe('true');
+      expect(response.headers.get('X-Cache-Status')).toBe('negative-hit');
+      expect(response.headers.get('X-Cache-Timestamp')).toBe(String(timestamp));
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('keeps a rejected coordinator stale refresh non-blocking', async () => {
+    const assetRequest = request('7903');
+
+    const identity = await buildAssetResolutionIdentity('7903', assetRequest, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    await seedStaleAsset(env.assetCache, identity, new Uint8Array([7]));
+
+    const coordinatorResolve = vi.fn(async () => {
+      throw new Error('Coordinator unavailable');
+    });
+
+    const testEnv = {
+      ...createTestEnv(false, env.assetCache, {
+        enabledFlags: ['asset-cache-layered', 'asset-upstream-coordinator'],
+      }),
+      ASSET_RESOLUTION_COORDINATOR: {
+        getByName: () => ({
+          resolve: coordinatorResolve,
+        }),
+      } as unknown as CloudflareBindings['ASSET_RESOLUTION_COORDINATOR'],
+    } as unknown as CloudflareBindings;
+
+    try {
+      const context = createExecutionContext();
+
+      const response = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, context);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('stale-hit');
+
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([7]));
+
+      await waitOnExecutionContext(context);
+
+      expect(coordinatorResolve).toHaveBeenCalledTimes(1);
+    } finally {
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('maps a lazy asset rate-limit rejection into batch results', async () => {
+    const limiter = vi.fn(async () => ({ success: false }));
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    try {
+      const response = await worker.fetch(
+        batchRequest({
+          assetIds: ['7910', '7911'],
+        }),
+        createTestEnv(false, createCache(), {
+          enabledFlags: ['asset-cache-hit-exempt-limit'],
+          rateLimit: limiter,
+        }),
+      );
+
+      expect(response.status).toBe(200);
+
+      const body = (await response.json()) as {
+        results: Array<{
+          assetId: string;
+          status: number;
+        }>;
+      };
+
+      expect(body.results).toEqual([
+        expect.objectContaining({
+          assetId: '7910',
+          status: 429,
+        }),
+        expect.objectContaining({
+          assetId: '7911',
+          status: 429,
+        }),
+      ]);
+
+      expect(limiter).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('maps an unexpected lazy-limit failure into a batch 500 result', async () => {
+    const limiter = vi.fn(async () => {
+      throw new Error('Limiter unavailable');
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    try {
+      const response = await worker.fetch(
+        batchRequest({
+          assetIds: ['7912'],
+        }),
+        createTestEnv(false, createCache(), {
+          enabledFlags: ['asset-cache-hit-exempt-limit'],
+          rateLimit: limiter,
+        }),
+      );
+
+      expect(response.status).toBe(200);
+
+      const body = (await response.json()) as {
+        results: Array<{
+          assetId: string;
+          status: number;
+          error: string;
+        }>;
+      };
+
+      expect(body.results).toEqual([
+        expect.objectContaining({
+          assetId: '7912',
+          status: 500,
+          error: 'Internal server error',
+        }),
+      ]);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('returns coordinator error bytes without optional response headers', async () => {
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'error',
+        status: 502,
+        error: 'Gateway failure',
+        data: new Uint8Array([4, 5, 6]),
+        attempts: 1,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'upstream',
+        cacheWrite: 'not-attempted',
+      }),
+    } as unknown as CloudflareBindings;
+
+    const response = await worker.fetch(request('7913'), testEnv);
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get('Retry-After')).toBeNull();
+
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([4, 5, 6]));
+  });
+
+  test('omits optional headers from a coordinator not-found result when absent', async () => {
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'not-found',
+        status: 404,
+        error: 'Asset not found',
+        attempts: 1,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'upstream',
+        cacheWrite: 'not-attempted',
+      }),
+    } as unknown as CloudflareBindings;
+
+    const response = await worker.fetch(request('7914'), testEnv);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('Retry-After')).toBeNull();
+    expect(response.headers.get('X-Cache-Timestamp')).toBeNull();
+    expect(response.headers.get('X-Cache-Hit')).toBe('false');
+  });
 });
