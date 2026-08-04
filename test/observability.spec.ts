@@ -6,8 +6,6 @@ import worker from './worker';
 function createEnv(reportLevel?: string): CloudflareBindings {
   return {
     ...env,
-    ROBLOX_API_KEY: '',
-    ENVIRONMENT: 'test',
     OBSERVABILITY_REPORT_LEVEL: reportLevel,
     assetCache: {
       async getWithMetadata() {
