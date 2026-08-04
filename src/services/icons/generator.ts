@@ -1,6 +1,14 @@
 import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
-import { enterTraceSpan, type LogLevel, parseReportLevel, shouldReport } from '../../middleware/observability';
+import { enterTraceSpan, parseReportLevel } from '../../middleware/observability';
+import { getErrorMessage, isTimeoutError } from '../../utils/errors';
+import { readBoundedBody } from './body';
+import { MAX_SVG_BYTES, SVG_PREFIX_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
+import { IconError } from './errors';
+import { logIconEvent } from './observability';
+import { getSvgIconUrl } from './sources';
+import type { IconOperationContext, SvgIconConfig } from './types';
+import { validateSvgIconConfig } from './validation';
 
 /*
  * Initialize once per Worker isolate. Individual requests await the same promise,
@@ -8,349 +16,35 @@ import { enterTraceSpan, type LogLevel, parseReportLevel, shouldReport } from '.
  */
 const wasmReady = initWasm(resvgWasm);
 
-const REMIX_ICON_CATEGORIES = [
-  'Arrows',
-  'Buildings',
-  'Business',
-  'Communication',
-  'Design',
-  'Development',
-  'Device',
-  'Document',
-  'Editor',
-  'Finance',
-  'Games & Sports',
-  'Health & Medical',
-  'Logos',
-  'Map',
-  'Media',
-  'Others',
-  'System',
-  'User & Faces',
-  'Weather',
-] as const;
-
-export type RemixIconCategory = (typeof REMIX_ICON_CATEGORIES)[number];
-export type FontAwesomeStyle = 'brands' | 'regular' | 'solid';
-
-type BaseIconConfig = {
-  iconName: string;
-  outputSize: number;
-};
-
-export type IconConfig = BaseIconConfig &
-  (
-    | {
-        iconType: 'lucide' | 'feather';
-      }
-    | {
-        iconType: 'remix';
-        category: RemixIconCategory;
-      }
-    | {
-        iconType: 'font-awesome';
-        style: FontAwesomeStyle;
-      }
-    | {
-        iconType: 'hero';
-        sourceSize: '16' | '20';
-        style: 'solid';
-      }
-    | {
-        iconType: 'hero';
-        sourceSize: '24';
-        style: 'outline' | 'solid';
-      }
-  );
-
-type IconStage = 'validation' | 'wasm' | 'upstream' | 'render';
-
-export type IconErrorCode =
-  | 'INVALID_CONFIG'
-  | 'INVALID_ICON_NAME'
-  | 'INVALID_OUTPUT_SIZE'
-  | 'WASM_INITIALIZATION_FAILED'
-  | 'ICON_NOT_FOUND'
-  | 'UPSTREAM_TIMEOUT'
-  | 'UPSTREAM_FETCH_FAILED'
-  | 'UPSTREAM_HTTP_ERROR'
-  | 'INVALID_CONTENT_TYPE'
-  | 'EMPTY_SVG'
-  | 'SVG_TOO_LARGE'
-  | 'INVALID_SVG'
-  | 'RENDER_FAILED'
-  | 'UNEXPECTED_ERROR';
-
-type IconErrorDetails = {
-  stage: IconStage;
-  retryable: boolean;
-  upstreamStatus?: number;
-  cause?: unknown;
-};
-
-/**
- * A stable operational error that the HTTP layer can safely translate into
- * status codes without inspecting error messages.
- */
-export class IconError extends Error {
-  readonly code: IconErrorCode;
-  readonly stage: IconStage;
-  readonly retryable: boolean;
-  readonly upstreamStatus?: number;
-
-  constructor(code: IconErrorCode, message: string, details: IconErrorDetails) {
-    super(message, { cause: details.cause });
-
-    this.name = 'IconError';
-    this.code = code;
-    this.stage = details.stage;
-    this.retryable = details.retryable;
-    this.upstreamStatus = details.upstreamStatus;
-  }
-}
-
-type IconLogger = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
-
-export type IconOperationContext = {
-  /**
-   * A request or correlation ID from the API handler.
-   * Keep this in logs rather than trace attributes to avoid high cardinality.
-   */
-  requestId?: string;
-
-  /**
-   * Allows tests to inject a logger or disable logs with a no-op logger.
-   */
-  logger?: IconLogger;
-
-  /** Successful conversions are opt-in because icons can be requested frequently. */
-  logSuccess?: boolean;
-
-  /** Controls icon logs and custom trace spans. Defaults to off. */
-  reportLevel?: string;
-};
-
-const MAX_SVG_BYTES = 512 * 1024;
-const MAX_OUTPUT_SIZE = 1024;
-const UPSTREAM_TIMEOUT_MS = 10_000;
-const SVG_PREFIX_BYTES = 8 * 1024;
-
-const ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
-const REMIX_CATEGORY_SET = new Set<string>(REMIX_ICON_CATEGORIES);
-const FONT_AWESOME_STYLES = new Set(['brands', 'regular', 'solid']);
-
-function logEvent(
-  logger: IconLogger,
-  level: LogLevel,
-  event: string,
-  fields: Record<string, unknown>,
-  reportLevel: string,
-): void {
-  if (!shouldReport(level, parseReportLevel(reportLevel))) return;
-
-  // Workers Logs preserves console objects, making these fields searchable.
-  logger[level]({
-    event,
-    ...fields,
-  });
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isTimeoutError(error: unknown): boolean {
-  return error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError');
-}
-
-function validateIconConfig(iconConfig: IconConfig): void {
-  /*
-   * TypeScript types disappear at runtime, so API input still needs explicit
-   * validation before being used to construct an upstream URL.
-   */
-  if (
-    typeof iconConfig.outputSize !== 'number' ||
-    !Number.isInteger(iconConfig.outputSize) ||
-    iconConfig.outputSize < 1 ||
-    iconConfig.outputSize > MAX_OUTPUT_SIZE
-  ) {
-    throw new IconError('INVALID_OUTPUT_SIZE', `outputSize must be an integer between 1 and ${MAX_OUTPUT_SIZE}`, {
-      stage: 'validation',
-      retryable: false,
-    });
-  }
-
-  if (typeof iconConfig.iconName !== 'string' || !ICON_NAME_PATTERN.test(iconConfig.iconName)) {
-    throw new IconError(
-      'INVALID_ICON_NAME',
-      'iconName must contain only lowercase letters, numbers, hyphens, and underscores',
-      {
-        stage: 'validation',
-        retryable: false,
-      },
-    );
-  }
-
-  switch (iconConfig.iconType) {
-    case 'lucide':
-    case 'feather':
-      return;
-
-    case 'remix':
-      if (!REMIX_CATEGORY_SET.has(iconConfig.category)) {
-        throw new IconError('INVALID_CONFIG', 'Invalid Remix icon category', {
-          stage: 'validation',
-          retryable: false,
-        });
-      }
-      return;
-
-    case 'font-awesome':
-      if (!FONT_AWESOME_STYLES.has(iconConfig.style)) {
-        throw new IconError('INVALID_CONFIG', 'Invalid Font Awesome style', {
-          stage: 'validation',
-          retryable: false,
-        });
-      }
-      return;
-
-    case 'hero':
-      if (
-        !['16', '20', '24'].includes(iconConfig.sourceSize) ||
-        !['solid', 'outline'].includes(iconConfig.style) ||
-        (iconConfig.sourceSize !== '24' && iconConfig.style !== 'solid')
-      ) {
-        throw new IconError('INVALID_CONFIG', 'Invalid Heroicons source size and style combination', {
-          stage: 'validation',
-          retryable: false,
-        });
-      }
-      return;
-
-    default:
-      throw new IconError('INVALID_CONFIG', 'Unsupported icon provider', {
-        stage: 'validation',
-        retryable: false,
-      });
-  }
-}
-
-function rawGitHubUrl(owner: string, repository: string, ref: string, ...pathSegments: string[]): string {
-  const encodedPath = pathSegments.map(encodeURIComponent).join('/');
-
-  return `https://raw.githubusercontent.com/${owner}/${repository}/${encodeURIComponent(ref)}/${encodedPath}`;
-}
-
-function getLucideSvgIconUrl(iconName: string): string {
-  return rawGitHubUrl('lucide-icons', 'lucide', 'main', 'icons', `${iconName}.svg`);
-}
-
-function getRemixIconUrl(category: RemixIconCategory, iconName: string): string {
-  return rawGitHubUrl('Remix-Design', 'RemixIcon', 'master', 'icons', category, `${iconName}.svg`);
-}
-
-function getFeatherIconUrl(iconName: string): string {
-  return rawGitHubUrl('feathericons', 'feather', 'main', 'icons', `${iconName}.svg`);
-}
-
-function getHeroIconUrl(sourceSize: '16' | '20' | '24', style: 'outline' | 'solid', iconName: string): string {
-  return rawGitHubUrl('tailwindlabs', 'heroicons', 'master', 'optimized', sourceSize, style, `${iconName}.svg`);
-}
-
-function getFontAwesomeIconUrl(style: FontAwesomeStyle, iconName: string): string {
-  return rawGitHubUrl('FortAwesome', 'Font-Awesome', '7.x', 'svgs', style, `${iconName}.svg`);
-}
-
-function getIconUrl(iconConfig: IconConfig): string {
-  switch (iconConfig.iconType) {
-    case 'lucide':
-      return getLucideSvgIconUrl(iconConfig.iconName);
-
-    case 'remix':
-      return getRemixIconUrl(iconConfig.category, iconConfig.iconName);
-
-    case 'feather':
-      return getFeatherIconUrl(iconConfig.iconName);
-
-    case 'hero':
-      return getHeroIconUrl(iconConfig.sourceSize, iconConfig.style, iconConfig.iconName);
-
-    case 'font-awesome':
-      return getFontAwesomeIconUrl(iconConfig.style, iconConfig.iconName);
-  }
-}
-
 /**
  * Reads an upstream response incrementally so a missing or dishonest
  * Content-Length header cannot force the Worker to buffer an unbounded body.
  */
 async function readSvgBody(response: Response): Promise<Uint8Array> {
-  const reader = response.body?.getReader();
-
-  if (!reader) {
-    throw new IconError('EMPTY_SVG', 'The upstream response did not contain a body', {
+  const content = await readBoundedBody(response, MAX_SVG_BYTES, () => {
+    return new IconError('SVG_TOO_LARGE', `SVG exceeds the ${MAX_SVG_BYTES}-byte limit`, {
       stage: 'upstream',
-      retryable: true,
+      retryable: false,
     });
-  }
+  });
 
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-
-  try {
-    while (true) {
-      const result = await reader.read();
-
-      if (result.done) {
-        break;
-      }
-
-      totalBytes += result.value.byteLength;
-
-      if (totalBytes > MAX_SVG_BYTES) {
-        try {
-          await reader.cancel();
-        } catch {
-          // The size error is more useful than a cancellation error.
-        }
-
-        throw new IconError('SVG_TOO_LARGE', `SVG exceeds the ${MAX_SVG_BYTES}-byte limit`, {
-          stage: 'upstream',
-          retryable: false,
-        });
-      }
-
-      chunks.push(result.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (totalBytes === 0) {
+  if (content.byteLength === 0) {
     throw new IconError('EMPTY_SVG', 'The upstream response contained an empty SVG', {
       stage: 'upstream',
       retryable: false,
     });
   }
 
-  const content = new Uint8Array(totalBytes);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    content.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
   return content;
 }
 
-async function getIconContent(iconConfig: IconConfig, reportLevel: string): Promise<Uint8Array> {
+async function getSvgIconContent(iconConfig: SvgIconConfig, reportLevel: string): Promise<Uint8Array> {
   return enterTraceSpan(
     'icon.fetch',
     async (span) => {
       span.setAttribute('icon.provider', iconConfig.iconType);
 
-      const url = getIconUrl(iconConfig);
+      const url = getSvgIconUrl(iconConfig);
 
       try {
         const response = await fetch(url, {
@@ -578,7 +272,7 @@ function renderPng(svgContent: Uint8Array, renderConfig: ResvgRenderOptions, rep
  * ```
  */
 export async function getPngFromSvgIcon(
-  iconConfig: IconConfig,
+  iconConfig: SvgIconConfig,
   providedConfig: ResvgRenderOptions = {},
   context: IconOperationContext = {},
 ): Promise<Uint8Array> {
@@ -586,7 +280,7 @@ export async function getPngFromSvgIcon(
   const reportLevel = parseReportLevel(context.reportLevel);
 
   try {
-    validateIconConfig(iconConfig);
+    validateSvgIconConfig(iconConfig);
 
     return await enterTraceSpan(
       'icon.generate',
@@ -600,12 +294,12 @@ export async function getPngFromSvgIcon(
 
         await ensureWasmReady();
 
-        const svgContent = await getIconContent(iconConfig, reportLevel);
+        const svgContent = await getSvgIconContent(iconConfig, reportLevel);
         const renderConfig = createRenderConfig(iconConfig.outputSize, providedConfig);
         const png = renderPng(svgContent, renderConfig, reportLevel);
 
         if (context.logSuccess) {
-          logEvent(
+          logIconEvent(
             logger,
             'info',
             'icon.generate.succeeded',
@@ -635,7 +329,7 @@ export async function getPngFromSvgIcon(
             cause: error,
           });
 
-    logEvent(
+    logIconEvent(
       logger,
       'error',
       'icon.generate.failed',

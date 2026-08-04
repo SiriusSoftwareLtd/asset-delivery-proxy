@@ -896,6 +896,7 @@ describe('asset delivery rollout', () => {
           ...createTestEnv(false, env.assetCache, {
             enabledFlags: ['asset-cache-layered', 'asset-upstream-backpressure'],
           }),
+          //@ts-expect-error this is a test env override
           ASSET_COORDINATOR_BUDGET_VERIFIED: 'false',
         },
         context,

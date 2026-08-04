@@ -83,11 +83,6 @@ export function getErrorFields(error: unknown): Record<string, unknown> {
   return { errorMessage: String(error) };
 }
 
-/** Returns whether an error was produced by an aborted or timed-out fetch. */
-export function isTimeoutError(error: unknown): boolean {
-  return error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError');
-}
-
 /** Adds request correlation and emits one access log per handled request. */
 export const observeRequests = createMiddleware<AppEnvironment>(async (c, next) => {
   const requestId = c.req.header('CF-Ray') ?? crypto.randomUUID();
