@@ -9,7 +9,14 @@ export default defineWorkersConfig({
 		},
 		coverage: {
 			provider: 'istanbul',
-			reporter: ['text', 'json', 'html']
+			reporter: ['text', 'json', 'html'],
+			thresholds: {
+		    lines: 70,
+		    functions: 70,
+		    branches: 70,
+		    statements: 70,
+			},
+			exclude: ["./scripts/verify-production.ts"]
 		}
   },
 });
