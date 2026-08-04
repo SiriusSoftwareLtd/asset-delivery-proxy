@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { logCacheError, readKv } from '../src/services/assets/cache';
+import { logCacheError, readKv, readL1 } from '../src/services/assets/cache';
 import type { AssetResolutionIdentity } from '../src/types/app';
 
 const identity: AssetResolutionIdentity = {
@@ -168,6 +168,75 @@ describe('asset cache validation', () => {
       );
     } finally {
       warn.mockRestore();
+    }
+  });
+
+  test('treats an empty L1 cache body as a miss', async () => {
+    const now = Date.now();
+
+    const matchMock = vi.spyOn(caches.default, 'match').mockImplementation(
+      async () =>
+        new Response(null, {
+          headers: {
+            'X-Asset-Fresh-Until': String(now + 60_000),
+            'X-Asset-Stale-Until': String(now + 120_000),
+            'X-Asset-Stored-At': String(now),
+            'X-Asset-Timestamp': String(now),
+            'X-Asset-Content-Type': 'image/png',
+          },
+        }),
+    );
+
+    try {
+      const result = await readL1(identity, now);
+
+      expect(result).toEqual({ kind: 'miss' });
+      expect(matchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      matchMock.mockRestore();
+    }
+  });
+
+  test('treats an L1 Cache API failure as a miss', async () => {
+    const matchMock = vi.spyOn(caches.default, 'match').mockImplementation(async () => {
+      throw new Error('Cache API unavailable');
+    });
+
+    try {
+      const result = await readL1(identity);
+
+      expect(result).toEqual({ kind: 'miss' });
+      expect(matchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      matchMock.mockRestore();
+    }
+  });
+
+  test('rejects malformed L1 metadata without reading the body', async () => {
+    const arrayBuffer = vi.fn(async () => new Uint8Array([1]).buffer);
+
+    const response = new Response(new Uint8Array([1]), {
+      headers: {
+        'X-Asset-Fresh-Until': 'not-a-number',
+        'X-Asset-Stored-At': '123',
+        'X-Asset-Timestamp': '123',
+        'X-Asset-Content-Type': 'image/png',
+      },
+    });
+
+    Object.defineProperty(response, 'arrayBuffer', {
+      value: arrayBuffer,
+    });
+
+    const matchMock = vi.spyOn(caches.default, 'match').mockImplementation(async () => response);
+
+    try {
+      const result = await readL1(identity);
+
+      expect(result).toEqual({ kind: 'miss' });
+      expect(arrayBuffer).not.toHaveBeenCalled();
+    } finally {
+      matchMock.mockRestore();
     }
   });
 });

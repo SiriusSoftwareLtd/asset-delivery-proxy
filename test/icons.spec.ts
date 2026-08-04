@@ -475,4 +475,87 @@ describe('icon delivery', () => {
 
     fetchMock.mockRestore();
   });
+
+  test('serves an icon when the icon cache read fails', async () => {
+    const cache = createCache();
+
+    const getMock = vi.spyOn(cache, 'getWithMetadata').mockImplementation(async () => {
+      throw new Error('KV read unavailable');
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(svg, {
+        headers: { 'Content-Type': 'image/svg+xml' },
+      }),
+    );
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv(cache),
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+    } as unknown as CloudflareBindings;
+
+    try {
+      const response = await worker.fetch(request('/icons/lucide/check'), testEnv);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Hit')).toBe('false');
+      expect(response.headers.get('X-Cache-Status')).toBe('read-error');
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'icon.cache.read_failed',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      getMock.mockRestore();
+      fetchMock.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  test('serves an icon when the icon cache write fails', async () => {
+    const cache = createCache();
+
+    const putMock = vi.spyOn(cache, 'put').mockImplementation(async () => {
+      throw new Error('KV write unavailable');
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(svg, {
+        headers: { 'Content-Type': 'image/svg+xml' },
+      }),
+    );
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv(cache),
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+    } as unknown as CloudflareBindings;
+
+    try {
+      const response = await worker.fetch(request('/icons/lucide/check'), testEnv);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Hit')).toBe('false');
+      expect(response.headers.get('X-Cache-Status')).toBe('write-error');
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'icon.cache.write_failed',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(putMock).toHaveBeenCalledTimes(1);
+    } finally {
+      putMock.mockRestore();
+      fetchMock.mockRestore();
+      warn.mockRestore();
+    }
+  });
 });

@@ -1150,4 +1150,94 @@ describe('asset delivery', () => {
       warn.mockRestore();
     }
   });
+  test('omits the extension header when a coordinator asset has no extension', async () => {
+    const timestamp = Date.now();
+
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'asset',
+        status: 200,
+        data: new Uint8Array([41, 42]),
+        contentType: 'application/octet-stream',
+        timestamp,
+        upstreamStatus: 200,
+        attempts: 1,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'upstream',
+        cacheWrite: 'written',
+      }),
+    } as unknown as CloudflareBindings;
+
+    const response = await worker.fetch(request('7801'), testEnv);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Asset-Extension')).toBeNull();
+    expect(response.headers.get('X-Cache-Hit')).toBe('false');
+    expect(response.headers.get('X-Cache-Status')).toBe('miss');
+    expect(response.headers.get('X-Cache-Timestamp')).toBe(String(timestamp));
+  });
+
+  test('preserves Retry-After and timestamp on a coordinator not-found result', async () => {
+    const timestamp = Date.now();
+
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'not-found',
+        status: 404,
+        error: 'Asset not found',
+        timestamp,
+        retryAfter: 7,
+        upstreamStatus: 404,
+        attempts: 1,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'upstream',
+        cacheWrite: 'not-attempted',
+      }),
+    } as unknown as CloudflareBindings;
+
+    const response = await worker.fetch(request('7802'), testEnv);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('Retry-After')).toBe('7');
+    expect(response.headers.get('X-Cache-Timestamp')).toBe(String(timestamp));
+    expect(response.headers.get('X-Cache-Hit')).toBe('false');
+  });
+
+  test('returns a coordinator error body without converting it to JSON', async () => {
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'error',
+        status: 503,
+        error: 'Roblox unavailable',
+        data: new Uint8Array([51, 52, 53]),
+        contentType: 'application/octet-stream',
+        upstreamStatus: 503,
+        retryAfter: 4,
+        attempts: 1,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'upstream',
+        cacheWrite: 'not-attempted',
+      }),
+    } as unknown as CloudflareBindings;
+
+    const response = await worker.fetch(request('7803'), testEnv);
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
+    expect(response.headers.get('Retry-After')).toBe('4');
+
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([51, 52, 53]));
+  });
 });

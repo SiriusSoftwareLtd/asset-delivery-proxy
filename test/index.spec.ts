@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:test';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import worker from './worker';
 
 function createTestEnv(options: { rateLimit?: () => Promise<{ success: boolean }> } = {}): CloudflareBindings {
@@ -52,5 +52,64 @@ describe('worker', () => {
     );
 
     expect(response.status).toBe(429);
+  });
+
+  test('falls back to global limiting when lazy asset-limit flag evaluation fails', async () => {
+    const limiter = vi.fn(async () => ({ success: false }));
+
+    const getBooleanValue = vi.fn(async (name: string, fallback = false) => {
+      if (name === 'asset-cache-hit-exempt-limit') {
+        throw new Error('Flag service unavailable');
+      }
+
+      return fallback;
+    });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv({
+        rateLimit: limiter,
+      }),
+      FLAGS: {
+        getBooleanValue,
+      },
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+    } as unknown as CloudflareBindings;
+
+    try {
+      const response = await worker.fetch(
+        request('/assets/123', {
+          headers: {
+            'X-Rayfield-Secure-Mode': 'true',
+          },
+        }),
+        testEnv,
+      );
+
+      expect(response.status).toBe(429);
+      expect(limiter).toHaveBeenCalledTimes(1);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'asset.flag.evaluation_failed',
+          flag: 'asset-cache-hit-exempt-limit',
+          errorMessage: 'Flag service unavailable',
+        }),
+      );
+
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'request.failed',
+          method: 'GET',
+          path: '/assets/123',
+          status: 429,
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
   });
 });

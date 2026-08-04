@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import { getErrorFields, parseReportLevel, shouldReport } from '../src/middleware/observability';
+import { enterTraceSpan, getErrorFields, parseReportLevel, shouldReport } from '../src/middleware/observability';
 import worker from './worker';
 
 function createEnv(reportLevel?: string): CloudflareBindings {
@@ -119,5 +119,23 @@ describe('observability report levels', () => {
     expect(getErrorFields('raw failure')).toEqual({
       errorMessage: 'raw failure',
     });
+  });
+
+  test('executes trace callbacks when info reporting is enabled', () => {
+    let callbackRan = false;
+
+    const result = enterTraceSpan(
+      'test.operation',
+      (span) => {
+        callbackRan = true;
+        span.setAttribute('test.attribute', 'value');
+
+        return 'completed';
+      },
+      'info',
+    );
+
+    expect(result).toBe('completed');
+    expect(callbackRan).toBe(true);
   });
 });
