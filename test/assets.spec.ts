@@ -1067,4 +1067,87 @@ describe('asset delivery', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     fetchMock.mockRestore();
   });
+
+  test('serves upstream asset bytes when the KV write fails', async () => {
+    const cache = createCache();
+
+    const putMock = vi.spyOn(cache, 'put').mockRejectedValue(new Error('KV write unavailable'));
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(new Uint8Array([21, 22, 23]), {
+          headers: { 'Content-Type': 'image/png' },
+        }),
+    );
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv(false, cache),
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+    } as unknown as CloudflareBindings;
+
+    try {
+      const response = await worker.fetch(request('7601'), testEnv);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('write-error');
+      expect(response.headers.get('X-Cache-Hit')).toBe('false');
+      expect(response.headers.get('X-Asset-Extension')).toBe('.png');
+
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([21, 22, 23]));
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(putMock).toHaveBeenCalledTimes(1);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'asset.cache.write_failed',
+          assetBytes: 3,
+        }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+      putMock.mockRestore();
+      warn.mockRestore();
+    }
+  });
+  test('returns 404 when the negative-cache KV write fails', async () => {
+    const cache = createCache();
+
+    const putMock = vi.spyOn(cache, 'put').mockRejectedValue(new Error('KV write unavailable'));
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, { status: 404 }));
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv(false, cache),
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+    } as unknown as CloudflareBindings;
+
+    try {
+      const response = await worker.fetch(request('7602'), testEnv);
+      const body = await response.json<{ error: string }>();
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get('X-Cache-Status')).toBe('write-error');
+      expect(response.headers.get('X-Cache-Hit')).toBe('false');
+
+      expect(body.error).toBe('Asset not found');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(putMock).toHaveBeenCalledTimes(1);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'asset.cache.negative_write_failed',
+        }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+      putMock.mockRestore();
+      warn.mockRestore();
+    }
+  });
 });
