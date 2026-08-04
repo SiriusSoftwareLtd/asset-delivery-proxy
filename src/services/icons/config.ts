@@ -1,6 +1,6 @@
 import type { IconConfig } from './generator';
 
-export type IconPackName = 'lucide' | 'feather' | 'remix' | 'font-awesome' | 'hero';
+export type IconPackName = 'lucide' | 'feather' | 'remix' | 'font-awesome' | 'hero' | 'rayfield';
 
 type IconPackRequest = {
   iconName: string;
@@ -12,7 +12,7 @@ type IconPackDefinition = {
   toConfig: (request: IconPackRequest) => IconConfig;
 };
 
-const PACK_NAMES = ['lucide', 'feather', 'remix', 'font-awesome', 'hero'] as const;
+const PACK_NAMES = ['lucide', 'feather', 'remix', 'font-awesome', 'hero', 'rayfield'] as const;
 const REMIX_CATEGORIES = [
   'Arrows',
   'Buildings',
@@ -67,8 +67,20 @@ function asOneOf<const T extends readonly string[]>(value: string, allowed: T, l
 }
 
 const iconPackRegistry: Record<IconPackName, IconPackDefinition> = {
-  lucide: { toConfig: ({ iconName, outputSize }) => ({ iconType: 'lucide', iconName, outputSize }) },
-  feather: { toConfig: ({ iconName, outputSize }) => ({ iconType: 'feather', iconName, outputSize }) },
+  lucide: {
+    toConfig: ({ iconName, outputSize }) => ({
+      iconType: 'lucide',
+      iconName,
+      outputSize,
+    }),
+  },
+  feather: {
+    toConfig: ({ iconName, outputSize }) => ({
+      iconType: 'feather',
+      iconName,
+      outputSize,
+    }),
+  },
   remix: {
     toConfig: ({ iconName, outputSize, query }) => ({
       iconType: 'remix',
@@ -96,6 +108,13 @@ const iconPackRegistry: Record<IconPackName, IconPackDefinition> = {
       return { iconType: 'hero', iconName, outputSize, sourceSize, style };
     },
   },
+  rayfield: {
+    toConfig: ({ iconName, outputSize }) => ({
+      iconType: 'rayfield',
+      iconName,
+      outputSize,
+    }),
+  },
 };
 
 export function isIconPackName(value: string): value is IconPackName {
@@ -110,7 +129,11 @@ export function parseIconConfig(
   if (!isIconPackName(iconPack)) throw new Error('Unsupported icon pack');
 
   const size = asOutputSize(queryValue(query, 'size') ?? '64');
-  const config = iconPackRegistry[iconPack].toConfig({ iconName, outputSize: size, query });
+  const config = iconPackRegistry[iconPack].toConfig({
+    iconName,
+    outputSize: size,
+    query,
+  });
   const options = new URLSearchParams(query);
   options.set('size', String(size));
 

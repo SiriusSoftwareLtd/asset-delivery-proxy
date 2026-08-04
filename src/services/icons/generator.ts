@@ -1,6 +1,7 @@
 import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
 import { enterTraceSpan, type LogLevel, parseReportLevel, shouldReport } from '../../middleware/observability';
+import { MAX_OUTPUT_SIZE, MAX_SVG_BYTES, SVG_PREFIX_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 
 /*
  * Initialize once per Worker isolate. Individual requests await the same promise,
@@ -41,7 +42,7 @@ type BaseIconConfig = {
 export type IconConfig = BaseIconConfig &
   (
     | {
-        iconType: 'lucide' | 'feather';
+        iconType: 'lucide' | 'feather' | 'rayfield';
       }
     | {
         iconType: 'remix';
@@ -129,11 +130,6 @@ export type IconOperationContext = {
   /** Controls icon logs and custom trace spans. Defaults to off. */
   reportLevel?: string;
 };
-
-const MAX_SVG_BYTES = 512 * 1024;
-const MAX_OUTPUT_SIZE = 1024;
-const UPSTREAM_TIMEOUT_MS = 10_000;
-const SVG_PREFIX_BYTES = 8 * 1024;
 
 const ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const REMIX_CATEGORY_SET = new Set<string>(REMIX_ICON_CATEGORIES);
@@ -235,7 +231,7 @@ function validateIconConfig(iconConfig: IconConfig): void {
   }
 }
 
-function rawGitHubUrl(owner: string, repository: string, ref: string, ...pathSegments: string[]): string {
+export function rawGitHubUrl(owner: string, repository: string, ref: string, ...pathSegments: string[]): string {
   const encodedPath = pathSegments.map(encodeURIComponent).join('/');
 
   return `https://raw.githubusercontent.com/${owner}/${repository}/${encodeURIComponent(ref)}/${encodedPath}`;
@@ -277,6 +273,9 @@ function getIconUrl(iconConfig: IconConfig): string {
 
     case 'font-awesome':
       return getFontAwesomeIconUrl(iconConfig.style, iconConfig.iconName);
+
+		default:
+      throw new Error(`Failed to resolve icon url for icon pack: ${iconConfig.iconType}`);
   }
 }
 
