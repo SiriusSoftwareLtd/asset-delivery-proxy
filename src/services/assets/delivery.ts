@@ -54,7 +54,7 @@ async function evaluateFlag(c: AppContext, name: string, fallback = false): Prom
     const flagValue = await c.env.FLAGS.getBooleanValue(name, fallback, {
       environment: c.env.ENVIRONMENT,
     });
-    console.log(`${name}: ${flagValue}`);
+
     return flagValue;
   } catch (error) {
     logEvent(
