@@ -71,6 +71,7 @@
 		"ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS": "30",
 		"ASSET_COORDINATOR_OPERATION_DEADLINE_MS": "25000",
 		"ASSET_COORDINATOR_RETRY_BASE_MS": "250",
+		"ENVIRONMENT": "production",
 	},
 	"secrets": {
 		"required": ["ROBLOX_API_KEY"],
@@ -87,13 +88,13 @@
 		{
 			"pattern": "proxy.sirius.menu",
 			"zone_name": "sirius.menu",
-			"custom_domain": true
+			"custom_domain": true,
 		},
 	],
 	"placement": {
 		"mode": "smart",
 	},
 	"limits": {
-		"cpu_ms": 1000
-	}
+		"cpu_ms": 1000,
+	},
 }

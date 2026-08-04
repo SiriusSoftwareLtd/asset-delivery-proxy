@@ -260,11 +260,11 @@ export async function fetchRobloxAsset(
       return { kind: 'response', response: discoveryResponse };
     }
 
-    if (protocol === 'v1') {
+    if (protocol === 'v1' && !authenticatedUrl) {
       return { kind: 'response', response: discoveryResponse };
     }
 
-    if (authenticatedUrl && !isJsonResponse(discoveryResponse)) {
+    if (protocol === 'v2' && authenticatedUrl && !isJsonResponse(discoveryResponse)) {
       return { kind: 'response', response: discoveryResponse };
     }
 
@@ -275,6 +275,7 @@ export async function fetchRobloxAsset(
       ),
       headers: upstreamHeaders,
     });
+
     return { kind: 'response', response, assetTypeId: discovery.assetTypeId };
   } catch (error) {
     if (error instanceof RobloxV2RejectedError) {
