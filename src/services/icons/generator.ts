@@ -274,7 +274,7 @@ function getIconUrl(iconConfig: IconConfig): string {
     case 'font-awesome':
       return getFontAwesomeIconUrl(iconConfig.style, iconConfig.iconName);
 
-		default:
+    default:
       throw new Error(`Failed to resolve icon url for icon pack: ${iconConfig.iconType}`);
   }
 }
