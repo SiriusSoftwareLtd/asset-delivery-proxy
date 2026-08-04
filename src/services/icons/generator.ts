@@ -120,7 +120,7 @@ async function getSvgIconContent(iconConfig: SvgIconConfig, reportLevel: string)
 
           return content;
         } finally {
-          upstream.cleanup();
+          await upstream.cleanup();
         }
       } catch (error) {
         if (error instanceof IconError) {

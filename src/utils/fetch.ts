@@ -1,6 +1,6 @@
 export type TimedFetchResponse = {
   response: Response;
-  cleanup: () => void;
+  cleanup: () => Promise<void>;
 };
 
 export async function fetchWithTimeout(
@@ -10,20 +10,30 @@ export async function fetchWithTimeout(
 ): Promise<TimedFetchResponse> {
   const controller = new AbortController();
   let cleanedUp = false;
+  let response: Response | undefined;
 
   const timeout = setTimeout(() => {
     controller.abort(new DOMException('The operation timed out', 'TimeoutError'));
   }, timeoutMs);
 
-  const cleanup = () => {
+  const cleanup = async () => {
     if (cleanedUp) return;
 
     cleanedUp = true;
-    clearTimeout(timeout);
+
+    try {
+      if (response?.body && !response.bodyUsed && !response.body.locked) {
+        await response.body.cancel();
+      }
+    } catch {
+      // Cleanup errors should not replace the request result.
+    } finally {
+      clearTimeout(timeout);
+    }
   };
 
   try {
-    const response = await fetch(input, {
+    response = await fetch(input, {
       ...init,
       signal: controller.signal,
     });
@@ -33,7 +43,7 @@ export async function fetchWithTimeout(
       cleanup,
     };
   } catch (error) {
-    cleanup();
+    await cleanup();
     throw error;
   }
 }

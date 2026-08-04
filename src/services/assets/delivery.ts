@@ -208,7 +208,7 @@ async function resolveDirect(
       },
     };
   } finally {
-    resolution.cleanup();
+    await resolution.cleanup();
   }
 }
 

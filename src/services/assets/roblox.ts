@@ -224,7 +224,7 @@ export type RobloxResolution =
   | {
       kind: 'response';
       response: Response;
-      cleanup: () => void;
+      cleanup: () => Promise<void>;
       assetTypeId?: number;
     }
   | {
@@ -275,7 +275,7 @@ export async function fetchRobloxAsset(
     try {
       discovery = await parseRobloxV2Discovery(discoveryResponse);
     } finally {
-      discoveryFetch.cleanup();
+      await discoveryFetch.cleanup();
     }
 
     const assetTimeoutMs = Math.max(

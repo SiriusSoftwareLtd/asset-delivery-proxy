@@ -45,7 +45,7 @@ describe('fetchWithTimeout', () => {
     expect(signal?.aborted).toBe(false);
     expect(vi.getTimerCount()).toBe(1);
 
-    result.cleanup();
+    await result.cleanup();
 
     expect(vi.getTimerCount()).toBe(0);
 
@@ -135,7 +135,7 @@ describe('fetchWithTimeout', () => {
 
     expect(vi.getTimerCount()).toBe(1);
 
-    result.cleanup();
+    await result.cleanup();
 
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -182,7 +182,7 @@ describe('fetchWithTimeout', () => {
     expect(signal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
 
-    result.cleanup();
+    await result.cleanup();
 
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -200,8 +200,8 @@ describe('fetchWithTimeout', () => {
 
     expect(vi.getTimerCount()).toBe(1);
 
-    result.cleanup();
-    result.cleanup();
+    await result.cleanup();
+    await result.cleanup();
 
     expect(vi.getTimerCount()).toBe(0);
 

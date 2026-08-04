@@ -343,7 +343,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             cacheWrite,
           };
         } finally {
-          resolution.cleanup();
+          await resolution.cleanup();
         }
       } finally {
         if (permitHeld) this.releasePermit();

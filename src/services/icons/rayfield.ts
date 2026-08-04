@@ -109,7 +109,7 @@ export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<Arr
 
       return await readRayfieldPngBody(response);
     } finally {
-      upstream.cleanup();
+      await upstream.cleanup();
     }
   } catch (error) {
     if (error instanceof IconError) throw error;
