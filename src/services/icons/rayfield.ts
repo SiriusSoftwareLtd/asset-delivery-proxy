@@ -1,4 +1,5 @@
-import { rawGitHubUrl } from './generator';
+import { UPSTREAM_TIMEOUT_MS } from './constants';
+import { IconError, rawGitHubUrl } from './generator';
 
 const RAYFIELD_ICON_IDS = {
   close: '83277910885129',
@@ -27,6 +28,39 @@ function getRayfieldIconUrlFromId(assetId: string): string {
 
 export function getRayfieldIconUrl(iconName: string): string {
   const iconId = resolveRayfieldIconId(iconName);
-  if (!iconId) throw new Error(`Icon not found: ${iconName}`);
+  if (!iconId)
+    throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
+      stage: 'upstream',
+      retryable: false,
+      upstreamStatus: 404,
+    });
   return getRayfieldIconUrlFromId(iconId);
+}
+
+export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<ArrayBuffer>> {
+  const url = getRayfieldIconUrlFromId(assetId);
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'image/png',
+    },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+  const buffer = await response.arrayBuffer();
+  if (response.status === 404) {
+    throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
+      stage: 'upstream',
+      retryable: false,
+      upstreamStatus: 404,
+    });
+  }
+  if (!response.ok) {
+    throw new IconError('UPSTREAM_HTTP_ERROR', 'Failed to fetch icon', {
+      stage: 'upstream',
+      retryable: false,
+      upstreamStatus: response.status,
+    });
+  }
+
+  return new Uint8Array(buffer);
 }

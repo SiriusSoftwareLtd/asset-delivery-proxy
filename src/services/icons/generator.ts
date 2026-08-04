@@ -42,7 +42,7 @@ type BaseIconConfig = {
 export type IconConfig = BaseIconConfig &
   (
     | {
-        iconType: 'lucide' | 'feather' | 'rayfield';
+        iconType: 'lucide' | 'feather';
       }
     | {
         iconType: 'remix';
@@ -61,6 +61,10 @@ export type IconConfig = BaseIconConfig &
         iconType: 'hero';
         sourceSize: '24';
         style: 'outline' | 'solid';
+      }
+    | {
+        iconType: 'rayfield';
+        assetId: string;
       }
   );
 
@@ -190,6 +194,7 @@ function validateIconConfig(iconConfig: IconConfig): void {
   switch (iconConfig.iconType) {
     case 'lucide':
     case 'feather':
+    case 'rayfield':
       return;
 
     case 'remix':

@@ -1,9 +1,8 @@
 import { errorResponse } from '../http/responses';
 import { enterTraceSpan, getErrorFields, logEvent } from '../middleware/observability';
 import { parseIconConfig } from '../services/icons/config';
-import { UPSTREAM_TIMEOUT_MS } from '../services/icons/constants';
 import { getPngFromSvgIcon, IconError } from '../services/icons/generator';
-import { getRayfieldIconUrl } from '../services/icons/rayfield';
+import { fetchRayfieldIcon } from '../services/icons/rayfield';
 import type { AppContext, CacheStatus } from '../types/app';
 import { bytesToBase64, mapWithConcurrency } from '../utils/batch';
 
@@ -85,7 +84,7 @@ export async function fetchIcon(
 
       span.setAttribute('icon.provider', iconPack);
 
-      const cacheKey = iconCacheKey(iconPack, parsed.normalizedOptions, iconName);
+      const cacheKey = iconCacheKey(iconPack, parsed.normalizedOptions, parsed.cacheIdentity);
       let cached: { value: ArrayBuffer | null; metadata: CachedIconMetadata | null } | undefined;
       let cacheStatus: CacheStatus = 'unknown';
 
@@ -113,24 +112,16 @@ export async function fetchIcon(
       if (cacheStatus === 'unknown') cacheStatus = 'miss';
 
       try {
-        let png: Uint8Array<ArrayBuffer> | undefined;
-        if (parsed.config.iconType === 'rayfield') {
-          const url = getRayfieldIconUrl(parsed.config.iconName);
-          // the rayfield icons are already stored as pngs on the rayfield gen2 repo.
-          const response = await fetch(url, {
-            headers: {
-              Accept: 'image/png',
-            },
-            redirect: 'manual',
-            signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-          });
-          const responseBuffer = await response.arrayBuffer();
-          png = new Uint8Array(responseBuffer);
-        } else {
-          png = asArrayBufferBytes(
-            await getPngFromSvgIcon(parsed.config, {}, { requestId, reportLevel: c.env.OBSERVABILITY_REPORT_LEVEL }),
-          );
-        }
+        const png: Uint8Array<ArrayBuffer> =
+          parsed.config.iconType === 'rayfield'
+            ? await fetchRayfieldIcon(parsed.config.assetId)
+            : asArrayBufferBytes(
+                await getPngFromSvgIcon(
+                  parsed.config,
+                  {},
+                  { requestId, reportLevel: c.env.OBSERVABILITY_REPORT_LEVEL },
+                ),
+              );
         const timestamp = Date.now();
 
         try {

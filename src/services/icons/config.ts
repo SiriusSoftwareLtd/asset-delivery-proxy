@@ -1,4 +1,5 @@
 import type { IconConfig } from './generator';
+import { resolveRayfieldIconId } from './rayfield';
 
 export type IconPackName = 'lucide' | 'feather' | 'remix' | 'font-awesome' | 'hero' | 'rayfield';
 
@@ -109,11 +110,11 @@ const iconPackRegistry: Record<IconPackName, IconPackDefinition> = {
     },
   },
   rayfield: {
-    toConfig: ({ iconName, outputSize }) => ({
-      iconType: 'rayfield',
-      iconName,
-      outputSize,
-    }),
+    toConfig: ({ iconName, outputSize }) => {
+      const assetId = resolveRayfieldIconId(iconName);
+      if (!assetId) throw new Error(`Icon ${iconName} not found`);
+      return { iconType: 'rayfield', outputSize, iconName, assetId };
+    },
   },
 };
 
@@ -125,7 +126,7 @@ export function parseIconConfig(
   iconPack: string,
   iconName: string,
   query: URLSearchParams,
-): { config: IconConfig; normalizedOptions: string } {
+): { config: IconConfig; normalizedOptions: string; cacheIdentity: string } {
   if (!isIconPackName(iconPack)) throw new Error('Unsupported icon pack');
 
   const size = asOutputSize(queryValue(query, 'size') ?? '64');
@@ -137,5 +138,11 @@ export function parseIconConfig(
   const options = new URLSearchParams(query);
   options.set('size', String(size));
 
-  return { config, normalizedOptions: options.toString() };
+  return {
+    config,
+    // we don't include options for rayfield icons in the cache key
+    normalizedOptions: config.iconType === 'rayfield' ? '' : options.toString(),
+    // rayfield icons are cached by their assetId, not by their name
+    cacheIdentity: config.iconType === 'rayfield' ? config.assetId : iconName,
+  };
 }
