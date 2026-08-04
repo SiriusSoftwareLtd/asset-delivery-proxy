@@ -43,6 +43,7 @@ function batchRequest(body: unknown) {
 }
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 1h22v22H1z"/></svg>';
+const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 
 describe('icon delivery', () => {
   test('renders a Lucide icon with PNG and cache headers without secure mode', async () => {
@@ -68,9 +69,13 @@ describe('icon delivery', () => {
   test.each([
     ['/icons/unknown/check', 'unknown icon pack unknown'],
     ['/icons/lucide/BadName', 'iconName'],
+    ['/icons/lucide/check?size=0', 'size'],
+    ['/icons/lucide/check?size=64px', 'size'],
     ['/icons/lucide/check?size=1025', 'size'],
     ['/icons/remix/check', 'category'],
     ['/icons/rayfield/BadName', 'iconName'],
+    ['/icons/rayfield/check?size=64', 'Rayfield icons do not support query options'],
+    ['/icons/rayfield/missing', 'The requested icon does not exist'],
   ])('rejects invalid request %s', async (path, message) => {
     const response = await worker.fetch(request(path), createTestEnv());
     expect(response.status).toBe(400);
@@ -93,6 +98,39 @@ describe('icon delivery', () => {
     fetchMock.mockRestore();
   });
 
+  test('uses the same cache entry for default and explicit default size', async () => {
+    const cache = createCache();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(svg));
+
+    const first = await worker.fetch(request('/icons/lucide/check'), createTestEnv(cache));
+    const second = await worker.fetch(request('/icons/lucide/check?size=64'), createTestEnv(cache));
+
+    expect(first.status).toBe(200);
+    expect(first.headers.get('X-Cache-Status')).toBe('miss');
+    expect(second.status).toBe(200);
+    expect(second.headers.get('X-Cache-Status')).toBe('hit');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cache.values.size).toBe(1);
+    fetchMock.mockRestore();
+  });
+
+  test('delivers registry-backed Rayfield PNG icons', async () => {
+    const cache = createCache();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(png));
+
+    const response = await worker.fetch(request('/icons/rayfield/check'), createTestEnv(cache));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('image/png');
+    expect(response.headers.get('X-Icon-Pack')).toBe('rayfield');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/siriusSoftwareLtd/rayfield-gen2/refs%2Fheads%2Fmain/assets/125626312718314.png',
+    );
+    expect([...cache.values.keys()][0]).toBe('icon:v1:rayfield::125626312718314');
+    fetchMock.mockRestore();
+  });
+
   test.each([
     [new Response('missing', { status: 404 }), 404],
     [new DOMException('timed out', 'TimeoutError'), 504],
@@ -109,8 +147,28 @@ describe('icon delivery', () => {
     vi.restoreAllMocks();
   });
 
+  test.each([
+    [new Response('<html>not svg</html>', { headers: { 'Content-Type': 'text/html' } }), 502],
+    [new Response('not svg', { headers: { 'Content-Type': 'text/plain' } }), 502],
+    [new Response('', { headers: { 'Content-Type': 'image/svg+xml' } }), 502],
+    [new Response(svg, { headers: { 'Content-Length': String(512 * 1024 + 1) } }), 502],
+  ])('rejects invalid upstream SVG responses', async (upstreamResponse, expectedStatus) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => upstreamResponse.clone());
+
+    const response = await worker.fetch(request('/icons/lucide/check'), createTestEnv());
+    const body = await response.json<{ error: string; requestId: string }>();
+
+    expect(response.status).toBe(expectedStatus);
+    expect(body.error).toBe('Unable to generate icon');
+    expect(body.requestId).toBeTruthy();
+    vi.restoreAllMocks();
+  });
+
   test('returns ordered base64 PNG results for mixed providers', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(svg));
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (String(url).includes('/siriusSoftwareLtd/rayfield-gen2/')) return new Response(png);
+      return new Response(svg);
+    });
     const response = await worker.fetch(
       batchRequest({
         icons: [
@@ -124,6 +182,11 @@ describe('icon delivery', () => {
             iconName: 'academic-cap',
             options: { sourceSize: '20', style: 'solid', size: '128' },
           },
+          {
+            iconPack: 'rayfield',
+            iconName: 'check',
+            options: {},
+          },
         ],
       }),
       createTestEnv(),
@@ -135,7 +198,7 @@ describe('icon delivery', () => {
 
     expect(response.status).toBe(200);
     expect(body.requestId).toBeTruthy();
-    expect(body.results).toHaveLength(2);
+    expect(body.results).toHaveLength(3);
     expect(body.results).toEqual([
       expect.objectContaining({
         iconPack: 'lucide',
@@ -153,13 +216,27 @@ describe('icon delivery', () => {
         cacheStatus: 'miss',
         cacheHit: false,
       }),
+      expect.objectContaining({
+        iconPack: 'rayfield',
+        iconName: 'check',
+        status: 200,
+        contentType: 'image/png',
+        cacheStatus: 'miss',
+        cacheHit: false,
+      }),
     ]);
     expect(
       body.results.every((result) => typeof result.dataBase64 === 'string' && (result.dataBase64 as string).length > 0),
     ).toBe(true);
-    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
-      '/tailwindlabs/heroicons/master/optimized/20/solid/academic-cap.svg',
-    );
+    const fetchedUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(
+      fetchedUrls.some((url) => url.includes('/tailwindlabs/heroicons/master/optimized/20/solid/academic-cap.svg')),
+    ).toBe(true);
+    expect(
+      fetchedUrls.some((url) =>
+        url.includes('/siriusSoftwareLtd/rayfield-gen2/refs%2Fheads%2Fmain/assets/125626312718314.png'),
+      ),
+    ).toBe(true);
     fetchMock.mockRestore();
   });
 
