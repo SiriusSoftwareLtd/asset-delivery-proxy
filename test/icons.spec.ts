@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
+import { MAX_PNG_BYTES } from '../src/services/icons/constants';
 import worker from './worker';
 
 function createCache() {
@@ -175,9 +176,58 @@ describe('icon delivery', () => {
     expect(response.headers.get('X-Icon-Pack')).toBe('rayfield');
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
-      '/siriusSoftwareLtd/rayfield-gen2/refs%2Fheads%2Fmain/assets/125626312718314.png',
+      '/SiriusSoftwareLtd/rayfield-gen2/main/assets/125626312718314.png',
     );
     expect([...cache.values.keys()][0]).toBe('icon:v1:rayfield::125626312718314');
+    fetchMock.mockRestore();
+  });
+
+  test.each([
+    ['upstream 404', new Response('missing', { status: 404 }), 404, 'Icon not found'],
+    ['timeout', new DOMException('timed out', 'TimeoutError'), 504, 'Icon source timed out'],
+    ['network error', new Error('upstream unavailable'), 502, 'Unable to generate icon'],
+    ['upstream 500', new Response('server error', { status: 500 }), 502, 'Unable to generate icon'],
+    [
+      'non-PNG 200',
+      new Response('not a png', { headers: { 'Content-Type': 'text/plain' } }),
+      502,
+      'Unable to generate icon',
+    ],
+    [
+      'oversized PNG',
+      new Response(png, { headers: { 'Content-Type': 'image/png', 'Content-Length': String(MAX_PNG_BYTES + 1) } }),
+      502,
+      'Unable to generate icon',
+    ],
+  ])('maps Rayfield %s to %s', async (_label, failure, expectedStatus, expectedError) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      if (failure instanceof Response) return failure.clone();
+      throw failure;
+    });
+
+    const response = await worker.fetch(request('/icons/rayfield/check'), createTestEnv());
+    const body = await response.json<{ error: string; requestId: string }>();
+
+    expect(response.status).toBe(expectedStatus);
+    expect(body.error).toBe(expectedError);
+    expect(body.requestId).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
+  test('uses one upstream fetch for Rayfield aliases that share an asset ID', async () => {
+    const cache = createCache();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(png));
+
+    const first = await worker.fetch(request('/icons/rayfield/dot'), createTestEnv(cache));
+    const second = await worker.fetch(request('/icons/rayfield/colorpicker'), createTestEnv(cache));
+
+    expect(first.status).toBe(200);
+    expect(first.headers.get('X-Cache-Status')).toBe('miss');
+    expect(second.status).toBe(200);
+    expect(second.headers.get('X-Cache-Status')).toBe('hit');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect([...cache.values.keys()]).toEqual(['icon:v1:rayfield::91452555903853']);
     fetchMock.mockRestore();
   });
 
@@ -216,7 +266,7 @@ describe('icon delivery', () => {
 
   test('returns ordered base64 PNG results for mixed providers', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
-      if (String(url).includes('/siriusSoftwareLtd/rayfield-gen2/')) return new Response(png);
+      if (String(url).includes('/SiriusSoftwareLtd/rayfield-gen2/')) return new Response(png);
       return new Response(svg);
     });
     const response = await worker.fetch(
@@ -283,9 +333,7 @@ describe('icon delivery', () => {
       fetchedUrls.some((url) => url.includes('/tailwindlabs/heroicons/master/optimized/20/solid/academic-cap.svg')),
     ).toBe(true);
     expect(
-      fetchedUrls.some((url) =>
-        url.includes('/siriusSoftwareLtd/rayfield-gen2/refs%2Fheads%2Fmain/assets/125626312718314.png'),
-      ),
+      fetchedUrls.some((url) => url.includes('/SiriusSoftwareLtd/rayfield-gen2/main/assets/125626312718314.png')),
     ).toBe(true);
     fetchMock.mockRestore();
   });

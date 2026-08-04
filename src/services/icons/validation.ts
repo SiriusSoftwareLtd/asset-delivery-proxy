@@ -1,11 +1,11 @@
 import { MAX_OUTPUT_SIZE } from './constants';
 import { IconError } from './errors';
-import { REMIX_ICON_CATEGORIES } from './providers';
+import { FONT_AWESOME_STYLES, REMIX_ICON_CATEGORIES } from './providers';
 import type { SvgIconConfig } from './types';
 
 const ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const REMIX_CATEGORY_SET = new Set<string>(REMIX_ICON_CATEGORIES);
-const FONT_AWESOME_STYLE_SET = new Set(['brands', 'regular', 'solid']);
+const FONT_AWESOME_STYLE_SET = new Set(FONT_AWESOME_STYLES);
 
 export function validateIconName(iconName: string): void {
   if (!ICON_NAME_PATTERN.test(iconName)) {
@@ -22,7 +22,10 @@ export function validateIconName(iconName: string): void {
 
 export function validateOutputSize(outputSize: number): void {
   if (!Number.isSafeInteger(outputSize) || outputSize < 1 || outputSize > MAX_OUTPUT_SIZE) {
-    throw new Error(`size must be an integer between 1 and ${MAX_OUTPUT_SIZE}`);
+    throw new IconError('INVALID_OUTPUT_SIZE', `size must be an integer between 1 and ${MAX_OUTPUT_SIZE}`, {
+      stage: 'validation',
+      retryable: false,
+    });
   }
 }
 

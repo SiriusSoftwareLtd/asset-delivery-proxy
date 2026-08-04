@@ -1,9 +1,9 @@
 import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
 import { enterTraceSpan, parseReportLevel } from '../../middleware/observability';
-import { isTimeoutError } from '../../utils/errors';
+import { getErrorMessage, isTimeoutError } from '../../utils/errors';
 import { MAX_SVG_BYTES, SVG_PREFIX_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
-import { getErrorMessage, IconError } from './errors';
+import { IconError } from './errors';
 import { logIconEvent } from './observability';
 import { getSvgIconUrl } from './sources';
 import type { IconOperationContext, SvgIconConfig } from './types';

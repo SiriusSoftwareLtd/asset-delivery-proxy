@@ -9,7 +9,7 @@ import {
   REMIX_ICON_CATEGORIES,
 } from './providers';
 import { resolveRayfieldIconId } from './rayfield';
-import type { IconConfig } from './types';
+import type { IconConfig, SvgIconConfig } from './types';
 import { validateIconName, validateOutputSize } from './validation';
 
 type IconPackRequest = {
@@ -20,8 +20,8 @@ type IconPackRequest = {
 
 type SvgIconPackName = Exclude<IconPackName, 'rayfield'>;
 
-type IconPackDefinition = {
-  toConfig: (request: IconPackRequest) => IconConfig;
+type SvgIconPackDefinition = {
+  toConfig: (request: IconPackRequest) => SvgIconConfig;
 };
 
 function queryValue(query: URLSearchParams, name: string): string | undefined {
@@ -32,14 +32,20 @@ function queryValue(query: URLSearchParams, name: string): string | undefined {
 function requiredQueryValue(query: URLSearchParams, name: string): string {
   const value = queryValue(query, name);
 
-  if (!value) throw new Error(`${name} is required`);
+  if (!value)
+    throw new IconError('INVALID_CONFIG', `${name} is required`, {
+      stage: 'validation',
+      retryable: false,
+    });
   return value;
 }
 
 function asOutputSize(value: string): number {
-  if (!/^\d+$/.test(value)) {
-    throw new Error(`size must be an integer between 1 and ${MAX_OUTPUT_SIZE}`);
-  }
+  if (!/^\d+$/.test(value))
+    throw new IconError('INVALID_OUTPUT_SIZE', `size must be an integer between 1 and ${MAX_OUTPUT_SIZE}`, {
+      stage: 'validation',
+      retryable: false,
+    });
 
   const size = Number(value);
 
@@ -53,7 +59,7 @@ function asOneOf<const T extends readonly string[]>(value: string, allowed: T, l
   return value as T[number];
 }
 
-const svgIconPackRegistry: Record<SvgIconPackName, IconPackDefinition> = {
+const svgIconPackRegistry: Record<SvgIconPackName, SvgIconPackDefinition> = {
   lucide: {
     toConfig: ({ iconName, outputSize }) => ({
       iconType: 'lucide',

@@ -1,8 +1,7 @@
 // observability.ts
 
 import { type LogLevel, parseReportLevel, shouldReport } from '../../middleware/observability';
-
-export type IconLogger = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
+import type { IconLogger } from './types';
 
 export function logIconEvent(
   logger: IconLogger,

@@ -43,13 +43,13 @@ X-Rayfield-Secure-Mode: true
 
 Successful responses include the asset bytes and these useful headers:
 
-| Header | Meaning |
-| --- | --- |
-| `X-Request-ID` | Request correlation ID. |
-| `X-Cache-Hit` | Whether the response was served from cache. |
-| `X-Cache-Status` | Cache outcome, including `l1-hit`, `kv-fresh-hit`, `stale-hit`, `miss`, or `negative-hit`. |
-| `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or fetched response. |
-| `X-Asset-Extension` | Detected asset filename extension, when known. |
+| Header              | Meaning                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------ |
+| `X-Request-ID`      | Request correlation ID.                                                                    |
+| `X-Cache-Hit`       | Whether the response was served from cache.                                                |
+| `X-Cache-Status`    | Cache outcome, including `l1-hit`, `kv-fresh-hit`, `stale-hit`, `miss`, or `negative-hit`. |
+| `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or fetched response.                         |
+| `X-Asset-Extension` | Detected asset filename extension, when known.                                             |
 
 Throttled and queue-rejected responses include `Retry-After`. With lazy miss limiting enabled, fresh, stale, and negative-cache hits do not consume the per-client Rate Limiting binding. A batch makes at most one client-limit decision after its cache lookups.
 
@@ -94,10 +94,18 @@ The JSON body must contain between 1 and 50 icon requests. Each item has an `ico
 
 ```json
 {
-  "icons": [
-    { "iconPack": "lucide", "iconName": "circle-check", "options": { "size": "64" } },
-    { "iconPack": "hero", "iconName": "academic-cap", "options": { "sourceSize": "20", "style": "solid", "size": "128" } }
-  ]
+	"icons": [
+		{
+			"iconPack": "lucide",
+			"iconName": "circle-check",
+			"options": { "size": "64" }
+		},
+		{
+			"iconPack": "hero",
+			"iconName": "academic-cap",
+			"options": { "sourceSize": "20", "style": "solid", "size": "128" }
+		}
+	]
 }
 ```
 
@@ -154,13 +162,13 @@ pnpm cf-typegen
 
 ## Development commands
 
-| Command | Description |
-| --- | --- |
-| `pnpm dev` | Start the Worker locally with observability enabled. |
-| `pnpm start` | Start Wrangler development mode. |
-| `pnpm test` | Run the Worker test suite. |
-| `pnpm cf-typegen` | Regenerate Cloudflare binding types. |
-| `pnpm deploy` | Deploy the configured Worker. |
+| Command                  | Description                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------- |
+| `pnpm dev`               | Start the Worker locally with observability enabled.                                     |
+| `pnpm start`             | Start Wrangler development mode.                                                         |
+| `pnpm test`              | Run the Worker test suite.                                                               |
+| `pnpm cf-typegen`        | Regenerate Cloudflare binding types.                                                     |
+| `pnpm deploy`            | Deploy the configured Worker.                                                            |
 | `pnpm verify:production` | Run live post-deploy verification against a configured Worker and Roblox asset fixtures. |
 
 ## Contributing

@@ -11,6 +11,7 @@ export type IconErrorCode =
   | 'UPSTREAM_HTTP_ERROR'
   | 'INVALID_CONTENT_TYPE'
   | 'EMPTY_SVG'
+  | 'PNG_TOO_LARGE'
   | 'SVG_TOO_LARGE'
   | 'INVALID_SVG'
   | 'RENDER_FAILED'
@@ -42,8 +43,4 @@ export class IconError extends Error {
     this.retryable = details.retryable;
     this.upstreamStatus = details.upstreamStatus;
   }
-}
-
-export function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -1,7 +1,4 @@
-import type { IconLogger } from './observability';
-import type { FontAwesomeStyle, RemixIconCategory } from './providers';
-
-export type IconStage = 'validation' | 'wasm' | 'upstream' | 'render';
+import type { FontAwesomeStyle, HeroStyle, RemixIconCategory } from './providers';
 
 export type BaseIconConfig = {
   iconName: string;
@@ -29,8 +26,15 @@ export type SvgIconConfig =
       iconType: 'hero';
       iconName: string;
       outputSize: number;
-      sourceSize: '16' | '20' | '24';
-      style: 'outline' | 'solid';
+      sourceSize: '16' | '20';
+      style: 'solid';
+    }
+  | {
+      iconType: 'hero';
+      iconName: string;
+      outputSize: number;
+      sourceSize: '24';
+      style: HeroStyle;
     };
 
 export type RayfieldIconConfig = {
@@ -40,6 +44,8 @@ export type RayfieldIconConfig = {
 };
 
 export type IconConfig = SvgIconConfig | RayfieldIconConfig;
+
+export type IconLogger = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
 
 export type IconOperationContext = {
   /**
