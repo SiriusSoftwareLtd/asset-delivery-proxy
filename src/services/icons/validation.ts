@@ -1,0 +1,74 @@
+import { MAX_OUTPUT_SIZE } from './constants';
+import { IconError } from './errors';
+import { REMIX_ICON_CATEGORIES } from './providers';
+import type { SvgIconConfig } from './types';
+
+const ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+const REMIX_CATEGORY_SET = new Set<string>(REMIX_ICON_CATEGORIES);
+const FONT_AWESOME_STYLE_SET = new Set(['brands', 'regular', 'solid']);
+
+export function validateIconName(iconName: string): void {
+  if (!ICON_NAME_PATTERN.test(iconName)) {
+    throw new IconError(
+      'INVALID_ICON_NAME',
+      'iconName must contain only lowercase letters, numbers, hyphens, and underscores',
+      {
+        stage: 'validation',
+        retryable: false,
+      },
+    );
+  }
+}
+
+export function validateOutputSize(outputSize: number): void {
+  if (!Number.isSafeInteger(outputSize) || outputSize < 1 || outputSize > MAX_OUTPUT_SIZE) {
+    throw new Error(`size must be an integer between 1 and ${MAX_OUTPUT_SIZE}`);
+  }
+}
+
+export function validateSvgIconConfig(config: SvgIconConfig): void {
+  validateIconName(config.iconName);
+  validateOutputSize(config.outputSize);
+
+  switch (config.iconType) {
+    case 'lucide':
+    case 'feather':
+      return;
+
+    case 'remix':
+      if (!REMIX_CATEGORY_SET.has(config.category)) {
+        throw new IconError('INVALID_CONFIG', 'Invalid Remix icon category', {
+          stage: 'validation',
+          retryable: false,
+        });
+      }
+      return;
+
+    case 'font-awesome':
+      if (!FONT_AWESOME_STYLE_SET.has(config.style)) {
+        throw new IconError('INVALID_CONFIG', 'Invalid Font Awesome style', {
+          stage: 'validation',
+          retryable: false,
+        });
+      }
+      return;
+
+    case 'hero':
+      if (
+        !['16', '20', '24'].includes(config.sourceSize) ||
+        !['solid', 'outline'].includes(config.style) ||
+        (config.sourceSize !== '24' && config.style !== 'solid')
+      ) {
+        throw new IconError('INVALID_CONFIG', 'Invalid Heroicons source size and style combination', {
+          stage: 'validation',
+          retryable: false,
+        });
+      }
+      return;
+    default:
+      throw new IconError('INVALID_CONFIG', 'Invalid icon type', {
+        stage: 'validation',
+        retryable: false,
+      });
+  }
+}

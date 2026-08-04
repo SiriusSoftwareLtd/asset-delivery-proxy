@@ -1,7 +1,16 @@
-import type { IconConfig } from './generator';
+import { MAX_OUTPUT_SIZE } from './constants';
+import { IconError } from './errors';
+import {
+  FONT_AWESOME_STYLES,
+  HERO_SOURCE_SIZES,
+  HERO_STYLES,
+  type IconPackName,
+  isIconPackName,
+  REMIX_ICON_CATEGORIES,
+} from './providers';
 import { resolveRayfieldIconId } from './rayfield';
-
-export type IconPackName = 'lucide' | 'feather' | 'remix' | 'font-awesome' | 'hero' | 'rayfield';
+import type { IconConfig } from './types';
+import { validateIconName, validateOutputSize } from './validation';
 
 type IconPackRequest = {
   iconName: string;
@@ -9,35 +18,11 @@ type IconPackRequest = {
   query: URLSearchParams;
 };
 
+type SvgIconPackName = Exclude<IconPackName, 'rayfield'>;
+
 type IconPackDefinition = {
   toConfig: (request: IconPackRequest) => IconConfig;
 };
-
-const PACK_NAMES = ['lucide', 'feather', 'remix', 'font-awesome', 'hero', 'rayfield'] as const;
-const REMIX_CATEGORIES = [
-  'Arrows',
-  'Buildings',
-  'Business',
-  'Communication',
-  'Design',
-  'Development',
-  'Device',
-  'Document',
-  'Editor',
-  'Finance',
-  'Games & Sports',
-  'Health & Medical',
-  'Logos',
-  'Map',
-  'Media',
-  'Others',
-  'System',
-  'User & Faces',
-  'Weather',
-] as const;
-const FONT_AWESOME_STYLES = ['brands', 'regular', 'solid'] as const;
-const HERO_SOURCE_SIZES = ['16', '20', '24'] as const;
-const HERO_STYLES = ['outline', 'solid'] as const;
 
 function queryValue(query: URLSearchParams, name: string): string | undefined {
   const value = query.get(name);
@@ -52,12 +37,13 @@ function requiredQueryValue(query: URLSearchParams, name: string): string {
 }
 
 function asOutputSize(value: string): number {
-  if (!/^\d+$/.test(value)) throw new Error('size must be an integer between 1 and 1024');
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`size must be an integer between 1 and ${MAX_OUTPUT_SIZE}`);
+  }
 
   const size = Number(value);
-  if (!Number.isSafeInteger(size) || size < 1 || size > 1024) {
-    throw new Error('size must be an integer between 1 and 1024');
-  }
+
+  validateOutputSize(size);
 
   return size;
 }
@@ -67,7 +53,7 @@ function asOneOf<const T extends readonly string[]>(value: string, allowed: T, l
   return value as T[number];
 }
 
-const iconPackRegistry: Record<IconPackName, IconPackDefinition> = {
+const svgIconPackRegistry: Record<SvgIconPackName, IconPackDefinition> = {
   lucide: {
     toConfig: ({ iconName, outputSize }) => ({
       iconType: 'lucide',
@@ -87,7 +73,7 @@ const iconPackRegistry: Record<IconPackName, IconPackDefinition> = {
       iconType: 'remix',
       iconName,
       outputSize,
-      category: asOneOf(requiredQueryValue(query, 'category'), REMIX_CATEGORIES, 'Remix icon category'),
+      category: asOneOf(requiredQueryValue(query, 'category'), REMIX_ICON_CATEGORIES, 'Remix icon category'),
     }),
   },
   'font-awesome': {
@@ -109,40 +95,63 @@ const iconPackRegistry: Record<IconPackName, IconPackDefinition> = {
       return { iconType: 'hero', iconName, outputSize, sourceSize, style };
     },
   },
-  rayfield: {
-    toConfig: ({ iconName, outputSize }) => {
-      const assetId = resolveRayfieldIconId(iconName);
-      if (!assetId) throw new Error(`Icon ${iconName} not found`);
-      return { iconType: 'rayfield', outputSize, iconName, assetId };
-    },
-  },
 };
-
-export function isIconPackName(value: string): value is IconPackName {
-  return (PACK_NAMES as readonly string[]).includes(value);
-}
 
 export function parseIconConfig(
   iconPack: string,
   iconName: string,
   query: URLSearchParams,
 ): { config: IconConfig; normalizedOptions: string; cacheIdentity: string } {
-  if (!isIconPackName(iconPack)) throw new Error('Unsupported icon pack');
+  if (!isIconPackName(iconPack))
+    throw new IconError('INVALID_CONFIG', `unknown icon pack ${iconPack}`, {
+      stage: 'validation',
+      retryable: false,
+    });
+
+  validateIconName(iconName);
+
+  if (iconPack === 'rayfield') {
+    if (query.size > 0) {
+      throw new IconError('INVALID_CONFIG', 'Rayfield icons do not support query options', {
+        stage: 'validation',
+        retryable: false,
+      });
+    }
+
+    const assetId = resolveRayfieldIconId(iconName);
+
+    if (!assetId) {
+      throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
+        stage: 'validation',
+        retryable: false,
+      });
+    }
+
+    return {
+      config: {
+        iconType: 'rayfield',
+        iconName,
+        assetId,
+      },
+      normalizedOptions: '',
+      cacheIdentity: assetId,
+    };
+  }
 
   const size = asOutputSize(queryValue(query, 'size') ?? '64');
-  const config = iconPackRegistry[iconPack].toConfig({
+
+  const config = svgIconPackRegistry[iconPack].toConfig({
     iconName,
     outputSize: size,
     query,
   });
+
   const options = new URLSearchParams(query);
   options.set('size', String(size));
 
   return {
     config,
-    // we don't include options for rayfield icons in the cache key
-    normalizedOptions: config.iconType === 'rayfield' ? '' : options.toString(),
-    // rayfield icons are cached by their assetId, not by their name
-    cacheIdentity: config.iconType === 'rayfield' ? config.assetId : iconName,
+    normalizedOptions: options.toString(),
+    cacheIdentity: iconName,
   };
 }

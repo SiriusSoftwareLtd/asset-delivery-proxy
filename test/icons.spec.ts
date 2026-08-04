@@ -8,7 +8,10 @@ function createCache() {
     values,
     async getWithMetadata<T>(key: string) {
       const stored = values.get(key);
-      return { value: stored?.value ?? null, metadata: (stored?.metadata as T | undefined) ?? null };
+      return {
+        value: stored?.value ?? null,
+        metadata: (stored?.metadata as T | undefined) ?? null,
+      };
     },
     async put(key: string, value: ArrayBuffer, options?: { metadata?: unknown }) {
       values.set(key, { value, metadata: options?.metadata });
@@ -63,10 +66,11 @@ describe('icon delivery', () => {
   });
 
   test.each([
-    ['/icons/unknown/check', 'Unsupported icon pack'],
+    ['/icons/unknown/check', 'unknown icon pack unknown'],
     ['/icons/lucide/BadName', 'iconName'],
     ['/icons/lucide/check?size=1025', 'size'],
     ['/icons/remix/check', 'category'],
+    ['/icons/rayfield/BadName', 'iconName'],
   ])('rejects invalid request %s', async (path, message) => {
     const response = await worker.fetch(request(path), createTestEnv());
     expect(response.status).toBe(400);
@@ -110,13 +114,24 @@ describe('icon delivery', () => {
     const response = await worker.fetch(
       batchRequest({
         icons: [
-          { iconPack: 'lucide', iconName: 'circle-check', options: { size: '64' } },
-          { iconPack: 'hero', iconName: 'academic-cap', options: { sourceSize: '20', style: 'solid', size: '128' } },
+          {
+            iconPack: 'lucide',
+            iconName: 'circle-check',
+            options: { size: '64' },
+          },
+          {
+            iconPack: 'hero',
+            iconName: 'academic-cap',
+            options: { sourceSize: '20', style: 'solid', size: '128' },
+          },
         ],
       }),
       createTestEnv(),
     );
-    const body = (await response.json()) as { requestId: string; results: Array<Record<string, unknown>> };
+    const body = (await response.json()) as {
+      requestId: string;
+      results: Array<Record<string, unknown>>;
+    };
 
     expect(response.status).toBe(200);
     expect(body.requestId).toBeTruthy();
@@ -155,13 +170,29 @@ describe('icon delivery', () => {
     expect(first.status).toBe(200);
 
     const response = await worker.fetch(
-      batchRequest({ icons: [{ iconPack: 'lucide', iconName: 'circle-check', options: { size: '64' } }] }),
+      batchRequest({
+        icons: [
+          {
+            iconPack: 'lucide',
+            iconName: 'circle-check',
+            options: { size: '64' },
+          },
+        ],
+      }),
       createTestEnv(cache),
     );
-    const body = (await response.json()) as { results: Array<Record<string, unknown>> };
+    const body = (await response.json()) as {
+      results: Array<Record<string, unknown>>;
+    };
 
     expect(response.status).toBe(200);
-    expect(body.results).toEqual([expect.objectContaining({ status: 200, cacheStatus: 'hit', cacheHit: true })]);
+    expect(body.results).toEqual([
+      expect.objectContaining({
+        status: 200,
+        cacheStatus: 'hit',
+        cacheHit: true,
+      }),
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });
@@ -176,7 +207,11 @@ describe('icon delivery', () => {
       batchRequest({
         icons: [
           { iconPack: 'unknown', iconName: 'check', options: {} },
-          { iconPack: 'hero', iconName: 'check', options: { sourceSize: '16', style: 'outline' } },
+          {
+            iconPack: 'hero',
+            iconName: 'check',
+            options: { sourceSize: '16', style: 'outline' },
+          },
           { iconPack: 'lucide', iconName: 'missing', options: {} },
           { iconPack: 'lucide', iconName: 'timeout', options: {} },
           { iconPack: 'lucide', iconName: 'failure', options: {} },
@@ -184,12 +219,14 @@ describe('icon delivery', () => {
       }),
       createTestEnv(),
     );
-    const body = (await response.json()) as { results: Array<Record<string, unknown>> };
+    const body = (await response.json()) as {
+      results: Array<Record<string, unknown>>;
+    };
 
     expect(response.status).toBe(200);
     expect(body.results.map((result) => result.status)).toEqual([400, 400, 404, 504, 502]);
     expect(body.results.map((result) => result.error)).toEqual([
-      'Unsupported icon pack',
+      'unknown icon pack unknown',
       'Heroicons 16 and 20 source sizes only support solid style',
       'Icon not found',
       'Icon source timed out',
@@ -199,12 +236,23 @@ describe('icon delivery', () => {
   });
 
   test.each([
-    new Request('https://proxy.test/icon/batch', { method: 'POST', body: '{not-json' }),
+    new Request('https://proxy.test/icon/batch', {
+      method: 'POST',
+      body: '{not-json',
+    }),
     batchRequest({}),
     batchRequest({ icons: [] }),
-    batchRequest({ icons: Array.from({ length: 51 }, () => ({ iconPack: 'lucide', iconName: 'check', options: {} })) }),
+    batchRequest({
+      icons: Array.from({ length: 51 }, () => ({
+        iconPack: 'lucide',
+        iconName: 'check',
+        options: {},
+      })),
+    }),
     batchRequest({ icons: [{ iconPack: 'lucide', options: {} }] }),
-    batchRequest({ icons: [{ iconPack: 'lucide', iconName: 'check', options: { size: 64 } }] }),
+    batchRequest({
+      icons: [{ iconPack: 'lucide', iconName: 'check', options: { size: 64 } }],
+    }),
   ])('rejects malformed batch body', async (batch) => {
     const response = await worker.fetch(batch, createTestEnv());
     expect(response.status).toBe(400);

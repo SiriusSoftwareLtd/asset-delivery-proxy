@@ -1,7 +1,8 @@
 import { errorResponse } from '../http/responses';
 import { enterTraceSpan, getErrorFields, logEvent } from '../middleware/observability';
 import { parseIconConfig } from '../services/icons/config';
-import { getPngFromSvgIcon, IconError } from '../services/icons/generator';
+import { IconError } from '../services/icons/errors';
+import { getPngFromSvgIcon } from '../services/icons/generator';
 import { fetchRayfieldIcon } from '../services/icons/rayfield';
 import type { AppContext, CacheStatus } from '../types/app';
 import { bytesToBase64, mapWithConcurrency } from '../utils/batch';

@@ -1,3 +1,5 @@
+import { isTimeoutError } from '../../utils/errors';
+
 const ROBLOX_ASSET_DELIVERY_ORIGIN = 'https://assetdelivery.roblox.com';
 const ROBLOX_OPEN_CLOUD_ASSET_DELIVERY_ORIGIN = 'https://apis.roblox.com';
 const ROBLOX_TIMEOUT_MS = 10_000;
@@ -230,10 +232,6 @@ export type RobloxResolution =
       upstreamStatus?: number;
       retryable: boolean;
     };
-
-function isTimeoutError(error: unknown): boolean {
-  return error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError');
-}
 
 function isJsonResponse(response: Response): boolean {
   return response.headers.get('Content-Type')?.toLowerCase().includes('json') ?? false;

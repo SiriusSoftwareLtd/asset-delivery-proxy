@@ -1,5 +1,6 @@
 import { UPSTREAM_TIMEOUT_MS } from './constants';
-import { IconError, rawGitHubUrl } from './generator';
+import { IconError } from './errors';
+import { rawGitHubUrl } from './sources';
 
 const RAYFIELD_ICON_IDS = {
   close: '83277910885129',
