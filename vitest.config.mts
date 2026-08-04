@@ -6,6 +6,9 @@ export default defineWorkersConfig({
       workers: {
         wrangler: { configPath: './wrangler.jsonc' },
       },
-    },
+		},
+		coverage: {
+			provider: 'v8',
+		}
   },
 });
