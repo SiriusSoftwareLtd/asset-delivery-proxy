@@ -73,13 +73,21 @@ export async function fetchIcon(
       try {
         parsed = parseIconConfig(iconPack, iconName, query);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Invalid icon request';
+        const iconError =
+          error instanceof IconError
+            ? error
+            : new IconError('INVALID_CONFIG', error instanceof Error ? error.message : 'Invalid config request', {
+                stage: 'validation',
+                retryable: false,
+                cause: error,
+              });
+
         return {
           iconPack,
           iconName,
           kind: 'error',
-          status: 400,
-          error: message,
+          status: errorStatus(iconError),
+          error: errorMessage(iconError),
         };
       }
 

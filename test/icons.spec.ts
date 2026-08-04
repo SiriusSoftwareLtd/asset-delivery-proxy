@@ -75,11 +75,61 @@ describe('icon delivery', () => {
     ['/icons/remix/check', 'category'],
     ['/icons/rayfield/BadName', 'iconName'],
     ['/icons/rayfield/check?size=64', 'Rayfield icons do not support query options'],
-    ['/icons/rayfield/missing', 'The requested icon does not exist'],
   ])('rejects invalid request %s', async (path, message) => {
     const response = await worker.fetch(request(path), createTestEnv());
+
     expect(response.status).toBe(400);
     expect((await response.json<{ error: string }>()).error).toContain(message);
+  });
+
+  test.each([
+    '/icons/rayfield/missing',
+    '/icons/lucide/missing',
+    '/icons/remix/missing?category=System',
+    '/icons/hero/missing',
+    '/icons/feather/missing',
+    '/icons/font-awesome/missing',
+  ])('returns 404 for an unknown icons', async (path) => {
+    const response = await worker.fetch(request(path), createTestEnv());
+    expect(response.status).toBe(404);
+    expect((await response.json<{ error: string }>()).error).toBe('Icon not found');
+  });
+
+  test('returns 404 per item for non-existent icons in a batch request', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('missing', { status: 404 }));
+
+    const response = await worker.fetch(
+      batchRequest({
+        icons: [
+          { iconPack: 'rayfield', iconName: 'missing', options: {} },
+          { iconPack: 'lucide', iconName: 'missing', options: {} },
+          { iconPack: 'remix', iconName: 'missing', options: { category: 'System' } },
+          { iconPack: 'hero', iconName: 'missing', options: {} },
+          { iconPack: 'feather', iconName: 'missing', options: {} },
+          { iconPack: 'font-awesome', iconName: 'missing', options: {} },
+        ],
+      }),
+      createTestEnv(),
+    );
+    const body = (await response.json()) as {
+      requestId: string;
+      results: Array<Record<string, unknown>>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.requestId).toBeTruthy();
+    expect(body.results).toHaveLength(6);
+    expect(body.results.map((result) => result.status)).toEqual([404, 404, 404, 404, 404, 404]);
+    expect(body.results.map((result) => result.error)).toEqual([
+      'Icon not found',
+      'Icon not found',
+      'Icon not found',
+      'Icon not found',
+      'Icon not found',
+      'Icon not found',
+    ]);
+
+    fetchMock.mockRestore();
   });
 
   test.each([

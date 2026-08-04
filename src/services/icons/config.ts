@@ -90,7 +90,11 @@ const svgIconPackRegistry: Record<SvgIconPackName, IconPackDefinition> = {
       const style = asOneOf(queryValue(query, 'style') ?? 'outline', HERO_STYLES, 'Heroicons style');
 
       if (sourceSize === '24') return { iconType: 'hero', iconName, outputSize, sourceSize, style };
-      if (style !== 'solid') throw new Error('Heroicons 16 and 20 source sizes only support solid style');
+      if (style !== 'solid')
+        throw new IconError('INVALID_CONFIG', 'Heroicons 16 and 20 source sizes only support solid style', {
+          stage: 'validation',
+          retryable: false,
+        });
 
       return { iconType: 'hero', iconName, outputSize, sourceSize, style };
     },
