@@ -1,5 +1,10 @@
-import { describe, expect, test } from 'vitest';
-import { extensionFromContentType, extensionFromPrefix, resolveAssetExtension } from '../src/services/assets/extension';
+import { describe, expect, test, vi } from 'vitest';
+import {
+  extensionFromContentType,
+  extensionFromPrefix,
+  readPrefixAndRestoreBody,
+  resolveAssetExtension,
+} from '../src/services/assets/extension';
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 
@@ -40,5 +45,28 @@ describe('asset extension detection', () => {
 
     expect(resolved.extension).toBe('.png');
     expect(new Uint8Array(await new Response(resolved.body).arrayBuffer())).toEqual(original);
+  });
+
+  test('cancels the upstream reader when the restored body is cancelled', async () => {
+    const cancel = vi.fn();
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(512));
+      },
+      cancel,
+    });
+
+    const restored = await readPrefixAndRestoreBody(stream);
+
+    expect(restored.body).not.toBeNull();
+
+    if (!restored.body) {
+      throw new Error('Expected restored body');
+    }
+
+    await restored.body.cancel('consumer stopped');
+
+    expect(cancel).toHaveBeenCalledWith('consumer stopped');
   });
 });

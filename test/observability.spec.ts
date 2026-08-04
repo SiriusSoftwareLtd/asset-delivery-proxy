@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import { parseReportLevel, shouldReport } from '../src/middleware/observability';
+import { getErrorFields, parseReportLevel, shouldReport } from '../src/middleware/observability';
 import worker from './worker';
 
 function createEnv(reportLevel?: string): CloudflareBindings {
@@ -95,5 +95,29 @@ describe('observability report levels', () => {
     expect(response.status).toBe(400);
     expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'request.failed' }));
     error.mockRestore();
+  });
+
+  test('converts Error causes and unknown errors into safe log fields', () => {
+    const cause = new Error('socket closed');
+    const error = new Error('request failed', { cause });
+
+    expect(getErrorFields(error)).toEqual(
+      expect.objectContaining({
+        errorName: 'Error',
+        errorMessage: 'request failed',
+        errorCause: 'socket closed',
+      }),
+    );
+
+    expect(getErrorFields(new Error('plain failure', { cause: 'upstream' }))).toEqual(
+      expect.objectContaining({
+        errorMessage: 'plain failure',
+        errorCause: 'upstream',
+      }),
+    );
+
+    expect(getErrorFields('raw failure')).toEqual({
+      errorMessage: 'raw failure',
+    });
   });
 });
