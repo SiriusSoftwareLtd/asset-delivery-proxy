@@ -8,7 +8,7 @@ export default defineWorkersConfig({
         miniflare: {
           bindings: {
             ROBLOX_API_KEY: '',
-            ENVIRONMENT: 'test',
+						ENVIRONMENT: 'test',
           },
         }
 			},

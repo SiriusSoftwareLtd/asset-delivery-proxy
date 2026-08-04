@@ -7,8 +7,6 @@
 		"dev": "cross-env X_LOCAL_OBSERVABILITY=true wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest run",
-		"test:assets": "cross-env ASSET_TEST_MATRIX=1 vitest run test/assets.spec.ts test/assetResilience.spec.ts",
-		"test:assets:verbose": "cross-env ASSET_TEST_MATRIX=1 vitest run test/assets.spec.ts test/assetResilience.spec.ts --reporter=verbose",
 		"coverage": "vitest run --coverage",
 		"typecheck": "tsc --noEmit && tsc --noEmit --project test/tsconfig.json",
 		"cf-typegen": "wrangler types --env-interface CloudflareBindings",
