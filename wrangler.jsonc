@@ -70,7 +70,7 @@
 		"ASSET_COORDINATOR_PERMIT_INTERVAL_MS": "1600",
 		"ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS": "30",
 		"ASSET_COORDINATOR_OPERATION_DEADLINE_MS": "25000",
-		"ASSET_COORDINATOR_RETRY_BASE_MS": "250"
+		"ASSET_COORDINATOR_RETRY_BASE_MS": "250",
 	},
 	"secrets": {
 		"required": ["ROBLOX_API_KEY"],
@@ -82,4 +82,17 @@
 			"app_id": "5204f93d-416a-4374-aefa-a6227b8876f1",
 		},
 	],
+	"workers_dev": false,
+	"routes": [
+		{
+			"pattern": "proxy.sirius.menu",
+			"zone_name": "sirius.menu",
+			"custom_domain": true,
+			"enabled": true,
+			"previews_enabled": false,
+		},
+	],
+	"placement": {
+		"mode": "smart",
+	},
 }
