@@ -1499,4 +1499,149 @@ describe('asset delivery', () => {
     expect(response.headers.get('X-Cache-Timestamp')).toBeNull();
     expect(response.headers.get('X-Cache-Hit')).toBe('false');
   });
+
+  test('ignores a response-body cancellation failure on a direct 404', async () => {
+    const cache = createCache();
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        throw new Error('body cancellation failed');
+      },
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(body, {
+          status: 404,
+        }),
+    );
+
+    try {
+      const response = await worker.fetch(request('7920'), createTestEnv(false, cache));
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get('X-Cache-Status')).toBe('negative-write');
+
+      const payload = await response.json<{
+        error: string;
+      }>();
+
+      expect(payload.error).toBe('Asset not found');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // The failed body cancellation must not prevent the
+      // negative-cache entry from being written.
+      expect(cache.values.size).toBe(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('ignores an L1 population failure after a fresh KV hit', async () => {
+    const cache = createCache();
+    const assetRequest = request('7921');
+
+    const identity = await buildAssetResolutionIdentity('7921', assetRequest, false);
+
+    const timestamp = Date.now();
+
+    cache.values.set(identity.physicalKey, {
+      value: new Uint8Array([21, 22]).buffer,
+      metadata: {
+        kind: 'asset',
+        version: 2,
+        timestamp,
+        storedAt: timestamp,
+        freshUntil: timestamp + 60_000,
+        staleUntil: timestamp + 120_000,
+        contentType: 'image/png',
+        extension: '.png',
+      },
+    });
+
+    const l1PutMock = vi.spyOn(caches.default, 'put').mockImplementation(async () => {
+      throw new Error('Cache API write failed');
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    try {
+      const context = createExecutionContext();
+
+      const response = await sourceWorker.fetch(
+        new IncomingRequest(assetRequest.clone()),
+        createTestEnv(false, cache, {
+          enabledFlags: ['asset-cache-layered'],
+        }),
+        context,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('kv-fresh-hit');
+      expect(response.headers.get('X-Cache-Hit')).toBe('true');
+
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([21, 22]));
+
+      await waitOnExecutionContext(context);
+
+      expect(l1PutMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      l1PutMock.mockRestore();
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('ignores an L1 population failure after an upstream asset miss', async () => {
+    const cache = createCache();
+    const assetRequest = request('7922');
+
+    const l1PutMock = vi.spyOn(caches.default, 'put').mockImplementation(async () => {
+      throw new Error('Cache API write failed');
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(new Uint8Array([31, 32, 33]), {
+          headers: {
+            'Content-Type': 'image/png',
+          },
+        }),
+    );
+
+    try {
+      const context = createExecutionContext();
+
+      const response = await sourceWorker.fetch(
+        new IncomingRequest(assetRequest.clone()),
+        createTestEnv(false, cache, {
+          enabledFlags: ['asset-cache-layered'],
+        }),
+        context,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('miss');
+      expect(response.headers.get('X-Cache-Hit')).toBe('false');
+      expect(response.headers.get('X-Asset-Extension')).toBe('.png');
+
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([31, 32, 33]));
+
+      await waitOnExecutionContext(context);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(l1PutMock).toHaveBeenCalledTimes(1);
+
+      // The normal KV write should still have succeeded even
+      // though population of the L1 Cache API failed.
+      expect(cache.values.size).toBe(1);
+    } finally {
+      fetchMock.mockRestore();
+      l1PutMock.mockRestore();
+    }
+  });
 });
