@@ -60,6 +60,7 @@ export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<Arr
         headers: {
           Accept: 'image/png',
         },
+        redirect: 'manual',
       },
       UPSTREAM_TIMEOUT_MS,
     );
