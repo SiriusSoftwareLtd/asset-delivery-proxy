@@ -17,10 +17,10 @@ export default defineWorkersConfig({
 			provider: 'istanbul',
 			reporter: ['text', 'json', 'html'],
 			thresholds: {
-			  lines: 90,
-			  functions: 90,
+			  lines: 94,
+			  functions: 92,
 			  branches: 80,
-			  statements: 85,
+			  statements: 90,
 			},
 			exclude: ["scripts/verify-production.ts", "test/worker.ts"]
 		}
