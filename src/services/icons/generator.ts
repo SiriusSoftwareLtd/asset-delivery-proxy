@@ -9,6 +9,7 @@ import { logIconEvent } from './observability';
 import { getSvgIconUrl } from './sources';
 import type { IconOperationContext, SvgIconConfig } from './types';
 import { validateSvgIconConfig } from './validation';
+import { fetchWithTimeout } from '../../utils/fetch';
 
 /*
  * Initialize once per Worker isolate. Individual requests await the same promise,
@@ -47,13 +48,16 @@ async function getSvgIconContent(iconConfig: SvgIconConfig, reportLevel: string)
       const url = getSvgIconUrl(iconConfig);
 
       try {
-        const response = await fetch(url, {
-          headers: {
-            Accept: 'image/svg+xml',
+        const response = await fetchWithTimeout(
+          url,
+          {
+            headers: {
+              Accept: 'image/svg+xml',
+            },
+            redirect: 'manual',
           },
-          redirect: 'manual',
-          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-        });
+          UPSTREAM_TIMEOUT_MS,
+        );
 
         span.setAttribute('http.status_code', response.status);
 

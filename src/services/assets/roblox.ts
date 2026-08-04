@@ -1,4 +1,5 @@
 import { isTimeoutError } from '../../utils/errors';
+import { fetchWithTimeout } from '../../utils/fetch';
 
 const ROBLOX_ASSET_DELIVERY_ORIGIN = 'https://assetdelivery.roblox.com';
 const ROBLOX_OPEN_CLOUD_ASSET_DELIVERY_ORIGIN = 'https://apis.roblox.com';
@@ -249,12 +250,12 @@ export async function fetchRobloxAsset(
     const authenticatedUrl = apiKey ? buildOpenCloudAssetDeliveryUrl(protocol, upstreamUrl) : undefined;
     if (apiKey) headers.set('x-api-key', apiKey);
 
-    const discoveryResponse = await fetch(authenticatedUrl ?? upstreamUrl, {
-      headers,
-      signal: AbortSignal.timeout(
-        Math.max(1, Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
-      ),
-    });
+    const discoveryTimeoutMs = Math.max(
+      1,
+      Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now()),
+    );
+
+    const discoveryResponse = await fetchWithTimeout(authenticatedUrl ?? upstreamUrl, { headers }, discoveryTimeoutMs);
 
     if (!discoveryResponse.ok) {
       return { kind: 'response', response: discoveryResponse };
@@ -269,12 +270,12 @@ export async function fetchRobloxAsset(
     }
 
     const discovery = await parseRobloxV2Discovery(discoveryResponse);
-    const response = await fetch(discovery.location, {
-      signal: AbortSignal.timeout(
-        Math.max(1, Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
-      ),
-      headers: upstreamHeaders,
-    });
+    const assetTimeoutMs = Math.max(
+      1,
+      Math.min(ROBLOX_TIMEOUT_MS, (deadline ?? Number.POSITIVE_INFINITY) - Date.now()),
+    );
+
+    const response = await fetchWithTimeout(discovery.location, { headers: upstreamHeaders }, assetTimeoutMs);
 
     return { kind: 'response', response, assetTypeId: discovery.assetTypeId };
   } catch (error) {

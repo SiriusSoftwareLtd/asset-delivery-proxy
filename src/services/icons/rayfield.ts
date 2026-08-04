@@ -1,4 +1,5 @@
 import { isTimeoutError } from '../../utils/errors';
+import { fetchWithTimeout } from '../../utils/fetch';
 import { readBoundedBody } from './body';
 import { MAX_PNG_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 import { IconError } from './errors';
@@ -53,13 +54,15 @@ async function readRayfieldPngBody(response: Response): Promise<Uint8Array<Array
 export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<ArrayBuffer>> {
   const url = getRayfieldIconUrlFromId(assetId);
   try {
-    const response = await fetch(url, {
-      headers: {
-        Accept: 'image/png',
+    const response = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          Accept: 'image/png',
+        },
       },
-      redirect: 'manual',
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    });
+      UPSTREAM_TIMEOUT_MS,
+    );
     if (response.status === 404) {
       throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
         stage: 'upstream',
