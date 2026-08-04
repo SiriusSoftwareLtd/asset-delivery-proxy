@@ -311,6 +311,30 @@ describe('asset delivery', () => {
     fetchMock.mockRestore();
   });
 
+  test.each([
+    ['missing location', {}],
+    ['invalid location URL', { location: 'not-a-url' }],
+    ['non-HTTPS location', { location: 'http://cdn.test/v1-asset' }],
+  ])('authenticated v1 rejects %s', async (_label, discovery) => {
+    const cache = createCache();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json(discovery));
+    const testEnv = {
+      ...createTestEnv(false, cache),
+      ROBLOX_API_KEY: 'session-token',
+    };
+
+    try {
+      const response = await worker.fetch(request('710'), testEnv);
+
+      expect(response.status).toBe(502);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://apis.roblox.com/asset-delivery-api/v1/assetId/710');
+      expect(cache.values.size).toBe(0);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   test('authenticates v2 discovery through Open Cloud without dropping allowlisted headers', async () => {
     const cache = createCache();
     const fetchMock = vi
