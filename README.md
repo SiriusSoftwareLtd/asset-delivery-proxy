@@ -119,6 +119,25 @@ pnpm exec wrangler secret put ROBLOX_API_KEY
 pnpm deploy
 ```
 
+After deployment, run the production verifier against the deployed Worker:
+
+```sh
+cp scripts/verify-production.assets.example.json scripts/verify-production.assets.json
+ASSET_PROXY_URL=https://<your-worker-hostname> ROBLOX_API_KEY=<roblox-open-cloud-key> pnpm verify:production
+```
+
+Edit the ignored `scripts/verify-production.assets.json` file with between 1 and 25 private Roblox asset fixtures. Include
+at least one stable image asset and one stable font asset when possible so extension detection, byte comparison, cache
+headers, and batch delivery are exercised across both supported asset kinds. The verifier loads `.env` automatically, so
+`ASSET_PROXY_URL`, `ROBLOX_API_KEY`, and optional verifier settings can live there for local operator runs. Do not commit
+real asset IDs if they are private, API keys, or generated verification output.
+
+`pnpm verify:production` checks `/health`, secure-mode rejection, single asset delivery against Roblox Open Cloud, cache
+hit behavior, ordered `/assets/batch` delivery, and duplicate batch consistency. It requires `ASSET_PROXY_URL` to be HTTPS
+unless `ASSET_PROXY_ALLOW_HTTP=true` is set for non-production testing. Optional knobs are
+`ASSET_PROXY_TEST_ASSETS_FILE`, `ASSET_PROXY_TIMEOUT_MS`, `ASSET_PROXY_CACHE_ATTEMPTS`, and
+`ASSET_PROXY_CACHE_DELAY_MS`.
+
 The CD workflow deploys the Worker from the `production` GitHub Actions environment after the `CI` workflow succeeds for a
 push to `main`, but only when that CI run's SHA is still the current `main` head. It verifies that condition before
 opening the deploy job and rechecks it immediately before `pnpm deploy` so a newer `main` commit cannot be overwritten by
@@ -141,6 +160,7 @@ pnpm cf-typegen
 | `pnpm test` | Run the Worker test suite. |
 | `pnpm cf-typegen` | Regenerate Cloudflare binding types. |
 | `pnpm deploy` | Deploy the configured Worker. |
+| `pnpm verify:production` | Run live post-deploy verification against a configured Worker and Roblox asset fixtures. |
 
 ## Contributing
 

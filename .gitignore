@@ -171,3 +171,6 @@ dist
 
 # OS Specific files
 *.DS_Store
+
+# Test files
+scripts/verify-production.assets.json
