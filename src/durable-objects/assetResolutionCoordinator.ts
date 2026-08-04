@@ -228,113 +228,123 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             resolution.upstreamStatus,
           );
         }
-
-        const response = resolution.response;
-        const upstreamStatus = response.status;
-        const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
-        if (!response.ok) {
-          if (upstreamStatus === 404) {
-            const timestamp = Date.now();
-            await response.body?.cancel().catch(() => undefined);
-            let cacheWrite: AssetCacheWriteOutcome = 'written';
-            try {
-              await writeNotFoundToKv(this.env.assetCache, request.identity, timestamp);
-            } catch {
-              cacheWrite = 'failed';
+        try {
+          const response = resolution.response;
+          const upstreamStatus = response.status;
+          const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
+          if (!response.ok) {
+            if (upstreamStatus === 404) {
+              const timestamp = Date.now();
+              await response.body?.cancel().catch(() => undefined);
+              let cacheWrite: AssetCacheWriteOutcome = 'written';
+              try {
+                await writeNotFoundToKv(this.env.assetCache, request.identity, timestamp);
+              } catch {
+                cacheWrite = 'failed';
+              }
+              return {
+                kind: 'not-found',
+                status: 404,
+                error: 'Asset not found',
+                timestamp,
+                upstreamStatus,
+                attempts: attempt,
+                queueTimeMs,
+                joined: false,
+                origin: 'upstream',
+                cacheWrite,
+              };
             }
+
+            if (upstreamStatus === 429) {
+              const retryAfter = parseRetryAfter(response.headers.get('Retry-After')) ?? this.fallbackCooldownSeconds;
+              if (request.backpressure) await this.enterCooldown(retryAfter);
+              await response.body?.cancel().catch(() => undefined);
+              return this.errorResult(
+                429,
+                response.statusText || 'Too Many Requests',
+                attempt,
+                queueTimeMs,
+                'upstream',
+                retryAfter,
+                429,
+              );
+            }
+
+            if (
+              request.backpressure &&
+              isRetryableUpstreamStatus(upstreamStatus) &&
+              attempt === 1 &&
+              Date.now() < request.deadline
+            ) {
+              await response.body?.cancel().catch(() => undefined);
+              this.releasePermit();
+              permitHeld = false;
+              if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
+                return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs, 'upstream');
+              }
+              continue;
+            }
+
             return {
-              kind: 'not-found',
-              status: 404,
-              error: 'Asset not found',
-              timestamp,
+              kind: 'error',
+              status: upstreamStatus,
+              error: response.statusText || 'Roblox asset delivery failed',
+              data: new Uint8Array(await response.arrayBuffer()),
+              contentType,
               upstreamStatus,
               attempts: attempt,
               queueTimeMs,
               joined: false,
               origin: 'upstream',
-              cacheWrite,
+              cacheWrite: 'not-attempted',
             };
           }
 
-          if (upstreamStatus === 429) {
-            const retryAfter = parseRetryAfter(response.headers.get('Retry-After')) ?? this.fallbackCooldownSeconds;
-            if (request.backpressure) await this.enterCooldown(retryAfter);
-            await response.body?.cancel().catch(() => undefined);
+          const resolved = await resolveAssetExtension(contentType, response.body, resolution.assetTypeId);
+          const data = new Uint8Array(await new Response(resolved.body).arrayBuffer());
+          if (data.byteLength === 0) {
             return this.errorResult(
-              429,
-              response.statusText || 'Too Many Requests',
+              502,
+              'Roblox returned an empty asset',
               attempt,
               queueTimeMs,
               'upstream',
-              retryAfter,
-              429,
+              undefined,
+              upstreamStatus,
             );
           }
-
-          if (
-            request.backpressure &&
-            isRetryableUpstreamStatus(upstreamStatus) &&
-            attempt === 1 &&
-            Date.now() < request.deadline
-          ) {
-            await response.body?.cancel().catch(() => undefined);
-            this.releasePermit();
-            permitHeld = false;
-            if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
-              return this.errorResult(504, 'Roblox asset delivery timed out', attempt, queueTimeMs, 'upstream');
-            }
-            continue;
+          const timestamp = Date.now();
+          let cacheWrite: AssetCacheWriteOutcome = 'written';
+          try {
+            await writeAssetToKv(
+              this.env.assetCache,
+              request.identity,
+              data,
+              contentType,
+              resolved.extension,
+              timestamp,
+            );
+          } catch {
+            cacheWrite = 'failed';
           }
-
           return {
-            kind: 'error',
-            status: upstreamStatus,
-            error: response.statusText || 'Roblox asset delivery failed',
-            data: new Uint8Array(await response.arrayBuffer()),
+            kind: 'asset',
+            status: 200,
+            data,
             contentType,
+            extension: resolved.extension,
+            timestamp,
             upstreamStatus,
             attempts: attempt,
             queueTimeMs,
             joined: false,
             origin: 'upstream',
-            cacheWrite: 'not-attempted',
+            cacheWrite,
           };
+        } finally {
+          resolution.cleanup();
         }
-
-        const resolved = await resolveAssetExtension(contentType, response.body, resolution.assetTypeId);
-        const data = new Uint8Array(await new Response(resolved.body).arrayBuffer());
-        if (data.byteLength === 0) {
-          return this.errorResult(
-            502,
-            'Roblox returned an empty asset',
-            attempt,
-            queueTimeMs,
-            'upstream',
-            undefined,
-            upstreamStatus,
-          );
-        }
-        const timestamp = Date.now();
-        let cacheWrite: AssetCacheWriteOutcome = 'written';
-        try {
-          await writeAssetToKv(this.env.assetCache, request.identity, data, contentType, resolved.extension, timestamp);
-        } catch {
-          cacheWrite = 'failed';
-        }
-        return {
-          kind: 'asset',
-          status: 200,
-          data,
-          contentType,
-          extension: resolved.extension,
-          timestamp,
-          upstreamStatus,
-          attempts: attempt,
-          queueTimeMs,
-          joined: false,
-          origin: 'upstream',
-          cacheWrite,
-        };
       } finally {
         if (permitHeld) this.releasePermit();
       }
