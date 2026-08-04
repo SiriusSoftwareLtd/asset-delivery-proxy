@@ -47,7 +47,6 @@ export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<Arr
     redirect: 'manual',
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
   });
-  const buffer = await response.arrayBuffer();
   if (response.status === 404) {
     throw new IconError('ICON_NOT_FOUND', 'The requested icon does not exist', {
       stage: 'upstream',
@@ -63,5 +62,5 @@ export async function fetchRayfieldIcon(assetId: string): Promise<Uint8Array<Arr
     });
   }
 
-  return new Uint8Array(buffer);
+  return new Uint8Array(await response.arrayBuffer());
 }
