@@ -22,7 +22,7 @@ export default defineWorkersConfig({
 		    branches: 70,
 		    statements: 70,
 			},
-			exclude: ["./scripts/verify-production.ts", "./test/worker.ts"]
+			exclude: ["scripts/verify-production.ts", "test/worker.ts"]
 		}
   },
 });
