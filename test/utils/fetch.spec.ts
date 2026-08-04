@@ -127,4 +127,46 @@ describe('fetchWithTimeout', () => {
 
     expect(vi.getTimerCount()).toBe(0);
   });
+  test('keeps the timeout active while the response body is streaming', async () => {
+    let signal: AbortSignal | null | undefined;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      signal = init?.signal;
+
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+
+          signal?.addEventListener(
+            'abort',
+            () => {
+              controller.error(signal?.reason);
+            },
+            { once: true },
+          );
+        },
+      });
+
+      return new Response(body);
+    });
+
+    const response = await fetchWithTimeout('https://example.com/asset', {}, 10_000);
+
+    // fetch() has already resolved, but the body has not completed.
+    expect(signal?.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+
+    const bodyRead = response.arrayBuffer();
+
+    const rejection = expect(bodyRead).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await rejection;
+
+    expect(signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
