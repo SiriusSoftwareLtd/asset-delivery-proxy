@@ -5,7 +5,13 @@ export default defineWorkersConfig({
     poolOptions: {
       workers: {
         wrangler: { configPath: './wrangler.jsonc' },
-      },
+			},
+			miniflare: {
+				bindings: {
+          ROBLOX_API_KEY: '',
+          ENVIRONMENT: 'test',
+        },
+      }
 		},
 		coverage: {
 			provider: 'istanbul',
