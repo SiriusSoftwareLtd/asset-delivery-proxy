@@ -11,7 +11,7 @@ describe('fetchWithTimeout', () => {
     vi.useRealTimers();
   });
 
-  test('returns the fetch response and keeps the timeout active until cleanup', async () => {
+  test('keeps the timeout active until cleanup is called', async () => {
     const response = new Response('ok', { status: 200 });
     let signal: AbortSignal | null | undefined;
 
@@ -52,6 +52,30 @@ describe('fetchWithTimeout', () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(signal?.aborted).toBe(false);
+  });
+
+  test('cleanup cancels an unread response body', async () => {
+    let cancelled = false;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      return new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      );
+    });
+
+    const result = await fetchWithTimeout('https://example.com/asset', {}, 10_000);
+
+    expect(result.response.bodyUsed).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await result.cleanup();
+
+    expect(cancelled).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   test('aborts the fetch when the timeout expires before a response is returned', async () => {
