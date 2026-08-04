@@ -37,6 +37,6 @@ jobs:
         run: pnpm lint
 
       - name: Run Tests
-        run: pnpm test
+        run: pnpm coverage
         env:
           ROBLOX_API_KEY: "ci-test-key"
