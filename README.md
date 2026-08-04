@@ -227,7 +227,7 @@ Malformed JSON, malformed body or item structure, an empty list, or more than 50
 Icon delivery applies bounded upstream handling before data is cached or returned:
 
 - SVG source responses are limited to 512 KiB.
-- Rayfield PNG source responses are limited to 256 KiB when the upstream declares a content length.
+- Rayfield PNG source responses are limited to 256 KiB.
 - Upstream icon requests time out after 10 seconds.
 - SVG responses are checked for an accepted content type and SVG content before rendering.
 - Rayfield PNG responses must use the `image/png` content type when one is supplied.

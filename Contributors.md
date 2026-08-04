@@ -17,6 +17,12 @@ pnpm test
 
 Use `pnpm dev` to run the Worker locally. The project relies on Cloudflare bindings configured in `wrangler.jsonc`; use bindings from your own Cloudflare account when testing deployed behavior. Never add API tokens, secrets, or private resource data to commits.
 
+## Continuous integration
+
+GitHub Actions runs the test suite with `ROBLOX_API_KEY` set to the non-secret placeholder `ci-test-key`. CI does not use a real Roblox Open Cloud API key.
+
+Production and live verification require a real `ROBLOX_API_KEY`. Store real credentials using Wrangler secrets or the appropriate GitHub environment secret. Never commit them or store them as repository variables.
+
 ## Making a change
 
 - Use TypeScript and follow the existing formatting and naming conventions.
