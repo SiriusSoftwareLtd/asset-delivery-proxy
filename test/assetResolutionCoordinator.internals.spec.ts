@@ -379,12 +379,15 @@ describe('asset resolution coordinator internals', () => {
         const coordinator = instance as unknown as CoordinatorInternals;
 
         const deadline = 10_000;
-
         const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
 
         const originalAcquirePermit = coordinator.acquirePermit.bind(coordinator);
 
         const acquirePermitMock = vi.fn(async () => {
+          // Mirror the real grantPermit() admission accounting so
+          // the test verifies that the admitted permit is released.
+          coordinator.active += 1;
+
           // Admission succeeds, but the request expires before
           // the upstream fetch begins.
           nowSpy.mockReturnValue(deadline);
@@ -418,6 +421,9 @@ describe('asset resolution coordinator internals', () => {
 
           expect(acquirePermitMock).toHaveBeenCalledTimes(1);
           expect(fetchMock).not.toHaveBeenCalled();
+
+          // The mocked admission increments active to 1. The
+          // resolveUncoalesced() cleanup path must release it.
           expect(coordinator.active).toBe(0);
         } finally {
           coordinator.acquirePermit = originalAcquirePermit;
