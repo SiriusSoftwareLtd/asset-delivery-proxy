@@ -76,7 +76,8 @@ export class AssetResolutionPermitQueue {
 
   rejectQueued(error: Error): void {
     for (const waiter of this.waiters.splice(0)) {
-      if (this.settle(waiter)) waiter.reject(error);
+      this.settle(waiter);
+      waiter.reject(error);
     }
   }
 
@@ -98,29 +99,41 @@ export class AssetResolutionPermitQueue {
 
   private dispatch(): void {
     this.expire();
-    if (this.active >= this.concurrency) return;
+
     const waiter = this.waiters.shift();
     if (!waiter) return;
+
     this.settle(waiter);
+
     void this.grant(waiter.enqueuedAt, waiter.deadline).then(waiter.resolve, waiter.reject);
   }
 
   private expire(now = Date.now()): void {
     for (let index = 0; index < this.waiters.length; ) {
       const waiter = this.waiters[index];
+
       if (!waiter || waiter.deadline > now) {
         index += 1;
         continue;
       }
+
       this.waiters.splice(index, 1);
-      if (this.settle(waiter)) waiter.reject(new AssetResolutionPermitDeadlineError());
+      this.settle(waiter);
+
+      waiter.reject(new AssetResolutionPermitDeadlineError());
     }
   }
 
   private expireWaiter(waiter: Waiter): void {
     const index = this.waiters.indexOf(waiter);
-    if (index !== -1) this.waiters.splice(index, 1);
-    if (this.settle(waiter)) waiter.reject(new AssetResolutionPermitDeadlineError());
+
+    if (index !== -1) {
+      this.waiters.splice(index, 1);
+    }
+
+    if (this.settle(waiter)) {
+      waiter.reject(new AssetResolutionPermitDeadlineError());
+    }
   }
 
   private settle(waiter: Waiter): boolean {

@@ -5,6 +5,20 @@ import {
   AssetResolutionQueueFullError,
 } from '../src/durable-objects/assetResolutionPermitQueue';
 
+type PermitQueueWaiter = {
+  enqueuedAt: number;
+  deadline: number;
+  resolve: (permit: { queueTimeMs: number }) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+  settled: boolean;
+};
+
+type PermitQueueInternals = {
+  waiters: PermitQueueWaiter[];
+  expireWaiter(waiter: PermitQueueWaiter): void;
+};
+
 describe('AssetResolutionPermitQueue', () => {
   it('grants a permit and dispatches the next queued caller after release', async () => {
     const queue = new AssetResolutionPermitQueue(1, 1, 0);
@@ -326,5 +340,48 @@ describe('AssetResolutionPermitQueue', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('ignores a stale timeout callback after a queued caller has been dispatched', async () => {
+    const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+    await queue.acquire(Date.now() + 1_000);
+
+    const queued = queue.acquire(Date.now() + 1_000);
+
+    const internals = queue as unknown as PermitQueueInternals;
+
+    const waiter = internals.waiters[0];
+
+    if (!waiter) {
+      throw new Error('Expected a queued permit waiter');
+    }
+
+    expect(queue.activeCount).toBe(1);
+    expect(queue.queuedCount).toBe(1);
+    expect(waiter.settled).toBe(false);
+
+    // Dispatching removes and settles the waiter.
+    queue.release();
+
+    await expect(queued).resolves.toMatchObject({
+      queueTimeMs: expect.any(Number),
+    });
+
+    expect(queue.activeCount).toBe(1);
+    expect(queue.queuedCount).toBe(0);
+    expect(waiter.settled).toBe(true);
+
+    // Simulate a stale timeout callback arriving after the waiter has
+    // already been granted. It must not reject or mutate queue state.
+    internals.expireWaiter(waiter);
+
+    expect(queue.activeCount).toBe(1);
+    expect(queue.queuedCount).toBe(0);
+    expect(waiter.settled).toBe(true);
+
+    queue.release();
+
+    expect(queue.activeCount).toBe(0);
   });
 });
