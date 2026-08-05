@@ -28,12 +28,12 @@ const RAYFIELD_ICON_IDS = {
 
 export type RayfieldIconName = keyof typeof RAYFIELD_ICON_IDS;
 
-function isRayfieldIconId(iconName: string): iconName is keyof typeof RAYFIELD_ICON_IDS {
+function isRayfieldIconName(iconName: string): iconName is keyof typeof RAYFIELD_ICON_IDS {
   return Object.hasOwn(RAYFIELD_ICON_IDS, iconName);
 }
 
 export function resolveRayfieldIconId(iconName: string): string | undefined {
-  if (!isRayfieldIconId(iconName)) {
+  if (!isRayfieldIconName(iconName)) {
     return undefined;
   }
 
