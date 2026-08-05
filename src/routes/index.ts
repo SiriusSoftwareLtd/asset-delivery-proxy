@@ -4,14 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import type { Hono } from 'hono';
+import { Hono } from 'hono';
 import type { AppEnvironment } from '../types/app';
 import { handleAssetBatchRequest, handleAssetDelivery } from './assetDelivery';
 import { handleIconBatchRequest, handleIconRequest } from './icons';
 
-export function registerRoutes(app: Hono<AppEnvironment>) {
-  app.post('/assets/batch', handleAssetBatchRequest);
-  app.get('/assets/:assetId', handleAssetDelivery);
-  app.get('/icons/:iconPack/:iconName', handleIconRequest);
-  app.post('/icon/batch', handleIconBatchRequest);
+export function registerRoutes(): Hono<AppEnvironment> {
+  const api = new Hono<AppEnvironment>();
+  api.post('/assets/batch', handleAssetBatchRequest);
+  api.get('/assets/:assetId', handleAssetDelivery);
+  api.get('/icons/:iconPack/:iconName', handleIconRequest);
+  api.post('/icons/batch', handleIconBatchRequest);
+  return api;
 }
