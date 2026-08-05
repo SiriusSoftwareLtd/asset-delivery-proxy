@@ -2,7 +2,7 @@
 
 ## Static prefix
 
-Keep this section and all content above the first task-specific addition byte-for-byte identical across agent runs when possible. Put dynamic task context after the static repository instructions to improve prompt-cache reuse.
+Keep this section and all content above any task-specific additions byte-for-byte identical across agent runs when possible. Put dynamic task context after the static repository instructions to improve prompt-cache reuse.
 
 ## Repository
 
@@ -13,7 +13,7 @@ Key paths:
 - `src/routes/` — HTTP route handlers.
 - `src/services/assets/` — Roblox delivery, caching, extension detection, coordinator client.
 - `src/services/icons/` — icon validation, providers, fetching, rendering.
-- `src/durable-objects/` — asset resolution coordination and backpressure.
+- `src/durable-objects/` — asset coordination and backpressure.
 - `src/middleware/` — rate limiting and observability.
 - `src/observability/` — asset metrics.
 - `src/types/` — shared Worker/Hono types.
@@ -85,7 +85,7 @@ Never run `pnpm deploy` unless explicitly requested.
 - Supported icon packs: `lucide`, `feather`, `remix`, `font-awesome`, `hero`, `rayfield`.
 - Icon size: integer `1..1024`, default `64`.
 - Handled responses use `X-Request-ID`.
-- Do not negatively cache transient failures; only definitive asset `404`s.
+- Only definitive asset `404`s may be negatively cached.
 - Preserve finite upstream timeouts and `502` vs `504` semantics.
 - Roblox v2 redirects must remain HTTPS and must not receive the Roblox API key.
 - Representation-affecting forwarded inputs must vary the cache key.
@@ -134,15 +134,15 @@ Broader Rayfield documentation belongs in `SiriusSoftwareLtd/docs`.
 
 ## Subagents and critics
 
-Use subagents only for bounded, independent work that would otherwise inflate the orchestrator context.
+Use subagents only for bounded, independent work that would otherwise inflate orchestrator context.
 
 Delegate with:
 
 - A precise question or file scope.
 - Only the minimum relevant context.
-- A required compact result format.
+- A compact required result format.
 
-Subagents should return findings, evidence, and proposed changes—not a replay of their reasoning or large source excerpts.
+Subagents return findings, evidence, and proposed changes—not reasoning transcripts or large source excerpts.
 
 The orchestrator owns:
 
@@ -153,13 +153,62 @@ The orchestrator owns:
 - Validation.
 - User-facing output.
 
-Use a critic only after a concrete draft, patch, or conclusion exists. Give the critic the artifact plus explicit review criteria.
+Use a critic only after a concrete draft, patch, or conclusion exists.
 
-Critics should return only:
+Critics return only:
 
 - Blocking issues.
 - Material correctness risks.
 - Missing validation.
 - Concise recommended fixes.
 
-Do not recursively delegate, ask multiple agents to duplicate the same investigation, or retain verbose subagent transcripts in the main context.
+Do not recursively delegate or ask multiple agents to duplicate the same investigation.
+
+## Commits and pull requests
+
+Follow `CONTRIBUTING.md`.
+
+Every Git commit message must follow Conventional Commits 1.0.0 and include exactly one Gitmoji in the subject.
+
+Required format:
+
+```text
+<type>[optional scope][!]: <gitmoji> <description>
+```
+
+Examples:
+
+```text
+feat(worker): ✨ add icon URL resolver
+fix(cache): 🐛 prevent stale entry corruption
+docs(api): 📝 document batch response fields
+refactor(assets)!: ♻️ replace legacy cache identity
+```
+
+Use `feat` for features and `fix` for bug fixes. Other valid types include:
+
+- `build`
+- `chore`
+- `ci`
+- `docs`
+- `perf`
+- `refactor`
+- `revert`
+- `style`
+- `test`
+
+Use a scope when it clarifies the affected subsystem.
+
+Keep descriptions short, imperative, and lowercase.
+
+For breaking changes, use `!` before the colon and/or a `BREAKING CHANGE:` footer:
+
+```text
+feat(api)!: 💥 change asset batch response shape
+
+BREAKING CHANGE: asset batch results now use the new response schema.
+```
+
+Optional bodies and footers must also follow Conventional Commits 1.0.0.
+
+Do not create commits that omit the Gitmoji or violate the Conventional Commits structure.
