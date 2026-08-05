@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AssetResolutionPermitDeadlineError,
   AssetResolutionPermitQueue,
@@ -62,16 +62,6 @@ describe('AssetResolutionPermitQueue', () => {
     queue.release();
   });
 
-  it('expires a waiter when admission is checked after its deadline', async () => {
-    const queue = new AssetResolutionPermitQueue(1, 1, 0);
-    await queue.acquire(Date.now() + 1_000);
-    const queued = queue.acquire(Date.now() + 20);
-    const rejection = expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    queue.release();
-    await rejection;
-  });
-
   it('releases a permit when persisted timing cannot be written', async () => {
     const storage = {
       get: async () => 0,
@@ -82,5 +72,87 @@ describe('AssetResolutionPermitQueue', () => {
     const queue = new AssetResolutionPermitQueue(1, 0, 0, storage);
     await expect(queue.acquire(Date.now() + 1_000)).rejects.toThrow('storage unavailable');
     expect(queue.activeCount).toBe(0);
+  });
+
+  it('expires queued work during dispatch when its deadline has passed', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+      await queue.acquire(2_000);
+
+      const queued = queue.acquire(1_100);
+
+      // Move Date.now() past the deadline without running the waiter's timer.
+      vi.setSystemTime(new Date(1_200));
+
+      queue.release();
+
+      await expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      expect(queue.queuedCount).toBe(0);
+      expect(queue.activeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects a deadline that has already been reached', async () => {
+    const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+    await expect(queue.acquire(Date.now())).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+    expect(queue.activeCount).toBe(0);
+    expect(queue.queuedCount).toBe(0);
+  });
+
+  it('rejects when restored permit timing cannot meet the deadline', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const storage = {
+        get: async () => 2_000,
+        put: async () => {},
+      } as unknown as DurableObjectStorage;
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 0, storage);
+
+      await queue.restore();
+
+      await expect(queue.acquire(1_500)).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      expect(queue.activeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases a permit when its deadline expires while persisting permit timing', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const storage = {
+      get: async () => 0,
+      put: async () => {
+        // Simulate the storage write taking long enough for the
+        // request deadline to expire.
+        now = 1_200;
+      },
+    } as unknown as DurableObjectStorage;
+
+    const queue = new AssetResolutionPermitQueue(1, 0, 0, storage);
+
+    try {
+      await expect(queue.acquire(1_100)).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      expect(queue.activeCount).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

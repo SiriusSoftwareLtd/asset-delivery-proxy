@@ -435,4 +435,54 @@ describe('asset resolution coordinator internals', () => {
       await env.assetCache.delete(identity.physicalKey);
     }
   });
+
+  test('reports a failed negative-cache KV write without failing resolution', async () => {
+    const assetId = `6${Date.now()}`;
+
+    const identity = await buildAssetResolutionIdentity(
+      assetId,
+      new Request(`https://proxy.test/v1/assets/${assetId}`),
+      false,
+    );
+
+    // As in the asset-write failure test, the empty physical key makes
+    // the KV write fail while the initial cache read remains recoverable.
+    const invalidIdentity = {
+      ...identity,
+      physicalKey: '',
+    };
+
+    const stub = createStub('not-found-write-failure');
+
+    await runInDurableObject(stub, async (instance) => {
+      const coordinator = instance as unknown as CoordinatorInternals;
+
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(null, {
+          status: 404,
+          statusText: 'Not Found',
+        }),
+      );
+
+      try {
+        const result = await coordinator.resolveUncoalesced({
+          identity: invalidIdentity,
+          deadline: Date.now() + 10_000,
+          backpressure: false,
+        });
+
+        expect(result).toEqual(
+          expect.objectContaining({
+            kind: 'not-found',
+            status: 404,
+            upstreamStatus: 404,
+            origin: 'upstream',
+            cacheWrite: 'failed',
+          }),
+        );
+      } finally {
+        fetchMock.mockRestore();
+      }
+    });
+  });
 });
