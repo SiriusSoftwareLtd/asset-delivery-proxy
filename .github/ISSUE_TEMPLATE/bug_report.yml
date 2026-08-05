@@ -1,0 +1,145 @@
+name: Bug Report
+description: Report a reproducible problem with the Asset Delivery Proxy.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug.
+
+        Please provide enough information for us to reproduce and diagnose the issue.
+
+        Do not include API keys, tokens, private asset IDs, or other sensitive information. Security vulnerabilities must be reported privately through GitHub Private Vulnerability Reporting.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Give a short description of the problem.
+      placeholder: Asset requests return an unexpected 502 response
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Where did the issue occur?
+      options:
+        - Production
+        - Local development
+        - CI
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the relevant commit SHA, branch, or deployed version if known.
+      placeholder: main @ abc1234
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      description: Which part of the service is affected?
+      options:
+        - Asset delivery
+        - Asset batch delivery
+        - Icon delivery
+        - Icon batch delivery
+        - Caching
+        - Durable Object coordination
+        - Rate limiting
+        - Observability
+        - Production verification
+        - CI/CD
+        - Configuration
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: endpoint
+    attributes:
+      label: Affected endpoint
+      description: Provide the affected HTTP endpoint if applicable.
+      placeholder: GET /assets/:assetId
+    validations:
+      required: false
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest set of steps needed to reproduce the issue.
+      placeholder: |
+        1. Start the Worker with ...
+        2. Send a request to ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+      placeholder: The asset should be returned with a 200 response.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+      placeholder: The request returned a 502 response.
+    validations:
+      required: true
+
+  - type: textarea
+    id: request
+    attributes:
+      label: Request details
+      description: |
+        Include a sanitized example request if it helps reproduce the issue.
+        Remove credentials, private asset IDs, tokens, cookies, and other sensitive information.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or request ID
+      description: |
+        Include relevant logs, error output, or an X-Request-ID if available.
+        Remove secrets and private information before submitting.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add screenshots or any other information that may help diagnose the issue.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find an existing report for this problem.
+          required: true
+        - label: I removed secrets, credentials, private asset IDs, and other sensitive information from this report.
+          required: true
+        - label: This is not a security vulnerability that should be reported privately.
+          required: true

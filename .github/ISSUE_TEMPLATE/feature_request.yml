@@ -1,0 +1,106 @@
+name: Feature Request
+description: Propose a change or new capability for the Asset Delivery Proxy.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement.
+
+        Describe the problem or use case first, then explain the behavior you would like to add or change.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Give a short description of the proposed change.
+      placeholder: Add support for ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      description: Which part of the service would this change affect?
+      options:
+        - Asset delivery
+        - Asset batch delivery
+        - Icon delivery
+        - Icon batch delivery
+        - Caching
+        - Durable Object coordination
+        - Rate limiting
+        - Observability
+        - Production verification
+        - CI/CD
+        - Configuration
+        - Developer tooling
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem does this solve, or what use case does it enable?
+      placeholder: |
+        Currently ...
+        This causes ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or implementation you would like to see.
+      placeholder: |
+        Add ...
+        The service should ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: api-impact
+    attributes:
+      label: API or compatibility impact
+      description: |
+        Describe any expected changes to endpoints, request formats, response formats, configuration, or compatibility.
+        Enter "None" if there is no expected impact.
+      placeholder: None
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any alternative approaches or workarounds you considered.
+      placeholder: |
+        I considered ...
+        This would not work because ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add examples, diagrams, screenshots, references, or other useful context.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find an existing request for this feature.
+          required: true
+        - label: I described the problem or use case, not only the proposed implementation.
+          required: true
+        - label: I did not include secrets, credentials, private asset IDs, or other sensitive information.
+          required: true

@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/SiriusSoftwareLtd/asset-delivery-proxy/security/advisories/new
+    about: Report security vulnerabilities privately through GitHub Private Vulnerability Reporting.
+
+  - name: Rayfield documentation
+    url: https://github.com/SiriusSoftwareLtd/docs
+    about: View or contribute to the broader Rayfield documentation.
