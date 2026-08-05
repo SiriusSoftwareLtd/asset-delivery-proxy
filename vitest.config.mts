@@ -1,20 +1,22 @@
-import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config';
+import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 
-export default defineWorkersConfig({
-  test: {
-    poolOptions: {
-      workers: {
-        wrangler: { configPath: './wrangler.jsonc' },
-        miniflare: {
-          bindings: {
-            ROBLOX_API_KEY: '',
-            ENVIRONMENT: 'test',
-            ASSET_COORDINATOR_PERMIT_INTERVAL_MS: '5',
-            ASSET_COORDINATOR_RETRY_BASE_MS: '2',
-          },
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  plugins: [
+    cloudflareTest({
+      wrangler: { configPath: './wrangler.jsonc' },
+      miniflare: {
+        bindings: {
+          ROBLOX_API_KEY: '',
+          ENVIRONMENT: 'test',
+          ASSET_COORDINATOR_PERMIT_INTERVAL_MS: '5',
+          ASSET_COORDINATOR_RETRY_BASE_MS: '2',
         },
       },
-    },
+    }),
+  ],
+  test: {
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html'],
