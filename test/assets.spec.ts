@@ -7,9 +7,9 @@
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
 import sourceWorker from '../src';
-import { fetchAsset } from '../src/assets/delivery';
+import type { AssetResolutionResult } from '../src/assets/types';
 import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
-import type { AssetResolutionResult } from '../src/types/app';
+import { fetchAsset } from '../src/services/assets/delivery';
 import worker from './worker';
 
 type StoredValue = {

@@ -7,8 +7,13 @@
 import { HTTPException } from 'hono/http-exception';
 import type { AppContext } from '../http/context';
 import { bytesToBase64 } from '../http/encoding';
+import {
+  type AssetDeliveryResult,
+  fetchAsset,
+  prepareAssetIdentity,
+  shouldUseAssetDeliveryV2,
+} from '../services/assets/delivery';
 import { mapWithConcurrency } from '../shared/concurrency';
-import { type AssetDeliveryResult, fetchAsset, prepareAssetIdentity, shouldUseAssetDeliveryV2 } from './delivery';
 
 export const MAX_BATCH_ASSETS = 25;
 export const MAX_BATCH_CONCURRENCY = 6;

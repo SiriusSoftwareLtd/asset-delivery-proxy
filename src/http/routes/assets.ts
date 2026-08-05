@@ -6,7 +6,7 @@
 
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { deliverAssetBatch, MAX_BATCH_ASSETS } from '../../assets/batch';
-import { type AssetDeliveryResult, fetchAsset, isValidAssetId } from '../../assets/delivery';
+import { type AssetDeliveryResult, fetchAsset, isValidAssetId } from '../../services/assets/delivery';
 import type { AppContext } from '../context';
 import { errorResponse } from '../responses';
 

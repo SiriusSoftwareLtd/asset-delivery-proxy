@@ -7,11 +7,11 @@ const mocks = vi.hoisted(() => ({
   getPngFromSvgIcon: vi.fn(),
 }));
 
-vi.mock('../../src/icons/config', () => ({
+vi.mock('../../src/services/icons/config', () => ({
   parseIconConfig: mocks.parseIconConfig,
 }));
 
-vi.mock('../../src/icons/rendering/generator', () => ({
+vi.mock('../../src/services/icons/generator', () => ({
   getPngFromSvgIcon: mocks.getPngFromSvgIcon,
 }));
 

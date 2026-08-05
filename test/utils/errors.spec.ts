@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { getErrorMessage, isTimeoutError } from '../../src/utils/errors';
+import { getErrorMessage, isTimeoutError } from '../../src/shared/errors';
 
 describe('error utilities', () => {
   test('recognizes TimeoutError DOMExceptions', () => {

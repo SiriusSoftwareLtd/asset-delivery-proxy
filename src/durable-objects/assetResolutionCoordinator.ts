@@ -5,16 +5,16 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { readKv, writeAssetToKv, writeNotFoundToKv } from '../assets/cache';
-import { resolveAssetExtension } from '../assets/extension';
 import type {
   AssetCacheWriteOutcome,
   AssetCoordinatorRequest,
   AssetResolutionOrigin,
   AssetResolutionResult,
 } from '../assets/types';
-import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../assets/upstream/roblox';
 import { cancelResponseBody } from '../infrastructure/http/cancelResponseBody';
+import { readKv, writeAssetToKv, writeNotFoundToKv } from '../services/assets/cache';
+import { resolveAssetExtension } from '../services/assets/extension';
+import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../services/assets/roblox';
 import { readInteger } from '../shared/config';
 import { jitter, sleepWithinDeadline } from '../shared/timing';
 import {

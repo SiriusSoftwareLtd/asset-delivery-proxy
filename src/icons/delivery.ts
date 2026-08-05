@@ -4,15 +4,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import type { CacheStatus } from '../assets/types';
 import type { AppContext } from '../http/context';
 import { getErrorFields, logEvent } from '../observability/logging';
 import { enterTraceSpan } from '../observability/tracing';
+import { parseIconConfig } from '../services/icons/config';
+import { IconError } from '../services/icons/errors';
+import { getPngFromSvgIcon } from '../services/icons/generator';
+import { fetchRayfieldIcon } from '../services/icons/rayfield';
 import { iconCacheKey, readIconCache, writeIconCache } from './cache';
-import { parseIconConfig } from './config';
-import { IconError } from './errors';
-import { fetchRayfieldIcon } from './providers/rayfield';
-import { getPngFromSvgIcon } from './rendering/generator';
-import type { CacheStatus } from './types';
 
 function asArrayBufferBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));

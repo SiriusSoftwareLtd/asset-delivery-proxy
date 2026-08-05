@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
+import type { AssetResolutionIdentity } from '../src/assets/types';
 import {
   type AssetCacheEntry,
   logCacheError,
@@ -8,7 +9,6 @@ import {
   writeAssetToKv,
   writeNotFoundToKv,
 } from '../src/services/assets/cache';
-import type { AssetResolutionIdentity } from '../src/types/app';
 
 const identity: AssetResolutionIdentity = {
   assetId: '123',

@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import type { CacheStatus } from './types';
+import type { CacheStatus } from '../assets/types';
 
 export const ICON_CACHE_TTL_SECONDS = 24 * 60 * 60;
 export type CachedIconMetadata = { kind: 'icon' | 'not-found'; timestamp: number };

@@ -6,7 +6,8 @@
 
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import { getErrorFields, parseReportLevel, shouldReport } from '../src/middleware/observability';
+import { getErrorFields } from '../src/observability/logging';
+import { parseReportLevel, shouldReport } from '../src/observability/reportLevel';
 import {
   enterTraceSpan,
   enterTraceSpanWithRuntime,
