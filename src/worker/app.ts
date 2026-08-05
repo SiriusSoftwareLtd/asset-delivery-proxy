@@ -18,7 +18,7 @@ export const app = new Hono<AppEnvironment>();
 app.use('*', observeRequests);
 
 app.use('*', async (c, next) => {
-  const isAssetRoute = c.req.path.startsWith('/assets/');
+  const isAssetRoute = c.req.path.startsWith('/v1/assets/');
   if (isAssetRoute) {
     try {
       if (await c.env.FLAGS.getBooleanValue('asset-cache-hit-exempt-limit', false)) {
