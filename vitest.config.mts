@@ -32,5 +32,13 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['scripts/verify-production.ts', 'test/worker.ts'],
     },
+    deps: {
+      optimizer: {
+        ssr: {
+          enabled: true,
+          include: ['@resvg/resvg-wasm', 'hono'],
+        },
+      },
+    },
   },
 });
