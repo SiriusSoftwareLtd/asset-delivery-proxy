@@ -6,11 +6,11 @@
 
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import sourceWorker from '../src';
-import type { AssetResolutionResult } from '../src/assets/types';
-import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
-import { fetchAsset } from '../src/services/assets/delivery';
-import worker from './worker';
+import sourceWorker from '../../src';
+import type { AssetResolutionResult } from '../../src/assets/types';
+import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
+import { fetchAsset } from '../../src/services/assets/delivery';
+import worker from '../worker';
 
 type StoredValue = {
   value: ArrayBuffer;

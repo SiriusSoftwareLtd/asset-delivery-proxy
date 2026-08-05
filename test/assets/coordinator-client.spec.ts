@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
-import type { AssetResolutionIdentity, AssetResolutionResult } from '../src/assets/types';
-import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
-import { coordinatorShard, resolveThroughCoordinator } from '../src/services/assets/coordinator-client';
+import type { AssetResolutionIdentity, AssetResolutionResult } from '../../src/assets/types';
+import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
+import { coordinatorShard, resolveThroughCoordinator } from '../../src/services/assets/coordinator-client';
 
 type CoordinatorRequest = {
   identity: AssetResolutionIdentity;

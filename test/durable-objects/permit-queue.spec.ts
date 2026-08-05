@@ -3,7 +3,7 @@ import {
   AssetResolutionPermitDeadlineError,
   AssetResolutionPermitQueue,
   AssetResolutionQueueFullError,
-} from '../src/durable-objects/assetResolutionPermitQueue';
+} from '../../src/durable-objects/assetResolutionPermitQueue';
 
 type PermitQueueWaiter = {
   enqueuedAt: number;

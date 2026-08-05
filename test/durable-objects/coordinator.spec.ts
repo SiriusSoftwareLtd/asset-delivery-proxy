@@ -1,9 +1,9 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import type { AssetCoordinatorRequest, AssetResolutionResult } from '../src/assets/types';
-import type { Permit } from '../src/durable-objects/assetResolutionCoordinator';
-import { AssetResolutionPermitDeadlineError } from '../src/durable-objects/assetResolutionPermitQueue';
-import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
+import type { AssetCoordinatorRequest, AssetResolutionResult } from '../../src/assets/types';
+import type { Permit } from '../../src/durable-objects/assetResolutionCoordinator';
+import { AssetResolutionPermitDeadlineError } from '../../src/durable-objects/assetResolutionPermitQueue';
+import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
 
 type CoordinatorInternals = {
   cooldownUntil: number;

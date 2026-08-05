@@ -6,7 +6,7 @@
 
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
+import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
 
 let assetIdSequence = 0;
 

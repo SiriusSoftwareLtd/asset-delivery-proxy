@@ -6,15 +6,15 @@
 
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import { getErrorFields } from '../src/observability/logging';
-import { parseReportLevel, shouldReport } from '../src/observability/reportLevel';
+import { getErrorFields } from '../../src/observability/logging';
+import { parseReportLevel, shouldReport } from '../../src/observability/reportLevel';
 import {
   enterTraceSpan,
   enterTraceSpanWithRuntime,
   type TraceRuntime,
   type TraceSpan,
-} from '../src/observability/tracing';
-import worker from './worker';
+} from '../../src/observability/tracing';
+import worker from '../worker';
 
 function createEnv(reportLevel?: string): CloudflareBindings {
   return {
