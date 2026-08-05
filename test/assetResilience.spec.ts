@@ -26,7 +26,7 @@ describe('asset resilience primitives', () => {
 
   test('coalesces 100 simultaneous same-key coordinator requests', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
     await env.assetCache.delete(identity.physicalKey);
     const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`coalescing-${assetId}`);
@@ -57,7 +57,7 @@ describe('asset resilience primitives', () => {
 
   test('persists a 429 cooldown and suppresses the next cold resolution', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
     await env.assetCache.delete(identity.physicalKey);
     const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`cooldown-${assetId}`);
@@ -80,7 +80,7 @@ describe('asset resilience primitives', () => {
 
   test('retries one transient upstream response after a new permit', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
     await env.assetCache.delete(identity.physicalKey);
     const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`retry-${assetId}`);
@@ -102,7 +102,7 @@ describe('asset resilience primitives', () => {
 
   test('marks an already-expired coordinator request as admission without fetching upstream', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
     await env.assetCache.delete(identity.physicalKey);
     const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`expired-${assetId}`);
@@ -129,17 +129,17 @@ describe('asset resilience primitives', () => {
     const laterAssetId = uniqueAssetId();
     const activeIdentity = await buildAssetResolutionIdentity(
       activeAssetId,
-      new Request(`https://proxy.test/assets/${activeAssetId}`),
+      new Request(`https://proxy.test/v1/assets/${activeAssetId}`),
       false,
     );
     const expiredIdentity = await buildAssetResolutionIdentity(
       expiredAssetId,
-      new Request(`https://proxy.test/assets/${expiredAssetId}`),
+      new Request(`https://proxy.test/v1/assets/${expiredAssetId}`),
       false,
     );
     const laterIdentity = await buildAssetResolutionIdentity(
       laterAssetId,
-      new Request(`https://proxy.test/assets/${laterAssetId}`),
+      new Request(`https://proxy.test/v1/assets/${laterAssetId}`),
       false,
     );
     await Promise.all([
@@ -189,7 +189,7 @@ describe('asset resilience primitives', () => {
   });
   test('negative-caches a coordinator 404 and serves the next request from KV', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
     await env.assetCache.delete(identity.physicalKey);
 
@@ -238,7 +238,7 @@ describe('asset resilience primitives', () => {
 
   test('uses the fallback cooldown when Roblox omits Retry-After', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
     await env.assetCache.delete(identity.physicalKey);
 
@@ -290,7 +290,7 @@ describe('asset resilience primitives', () => {
 
   test('rejects an empty successful upstream asset', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
 
     await env.assetCache.delete(identity.physicalKey);
@@ -332,7 +332,7 @@ describe('asset resilience primitives', () => {
 
   test('does not retry a retryable status when backpressure is disabled', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
 
     await env.assetCache.delete(identity.physicalKey);
@@ -372,7 +372,7 @@ describe('asset resilience primitives', () => {
 
     const identities = await Promise.all(
       assetIds.map((assetId) =>
-        buildAssetResolutionIdentity(assetId, new Request(`https://proxy.test/assets/${assetId}`), false),
+        buildAssetResolutionIdentity(assetId, new Request(`https://proxy.test/v1/assets/${assetId}`), false),
       ),
     );
 
@@ -453,7 +453,7 @@ describe('asset resilience primitives', () => {
 
   test('serves a sequential coordinator request from fresh KV', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
 
     await env.assetCache.delete(identity.physicalKey);
@@ -522,13 +522,13 @@ describe('asset resilience primitives', () => {
 
     const firstIdentity = await buildAssetResolutionIdentity(
       firstAssetId,
-      new Request(`https://proxy.test/assets/${firstAssetId}`),
+      new Request(`https://proxy.test/v1/assets/${firstAssetId}`),
       false,
     );
 
     const secondIdentity = await buildAssetResolutionIdentity(
       secondAssetId,
-      new Request(`https://proxy.test/assets/${secondAssetId}`),
+      new Request(`https://proxy.test/v1/assets/${secondAssetId}`),
       false,
     );
 
@@ -596,7 +596,7 @@ describe('asset resilience primitives', () => {
 
     const identities = await Promise.all(
       assetIds.map((assetId) =>
-        buildAssetResolutionIdentity(assetId, new Request(`https://proxy.test/assets/${assetId}`), false),
+        buildAssetResolutionIdentity(assetId, new Request(`https://proxy.test/v1/assets/${assetId}`), false),
       ),
     );
 
@@ -692,7 +692,7 @@ describe('asset resilience primitives', () => {
 
   test('returns a single upstream rejection when backpressure is disabled', async () => {
     const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
 
     await env.assetCache.delete(identity.physicalKey);

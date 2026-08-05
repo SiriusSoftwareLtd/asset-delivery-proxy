@@ -256,7 +256,7 @@ describe('asset resolution coordinator internals', () => {
 
     const identity = await buildAssetResolutionIdentity(
       assetId,
-      new Request(`https://proxy.test/assets/${assetId}`),
+      new Request(`https://proxy.test/v1/assets/${assetId}`),
       false,
     );
 
@@ -308,7 +308,7 @@ describe('asset resolution coordinator internals', () => {
 
     const identity = await buildAssetResolutionIdentity(
       assetId,
-      new Request(`https://proxy.test/assets/${assetId}`),
+      new Request(`https://proxy.test/v1/assets/${assetId}`),
       false,
     );
 
@@ -366,7 +366,7 @@ describe('asset resolution coordinator internals', () => {
 
     const identity = await buildAssetResolutionIdentity(
       assetId,
-      new Request(`https://proxy.test/assets/${assetId}`),
+      new Request(`https://proxy.test/v1/assets/${assetId}`),
       false,
     );
 

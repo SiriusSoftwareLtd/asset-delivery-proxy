@@ -43,7 +43,7 @@ function createCoordinatorEnv(options: { shards?: string; deadlineMs?: string; b
 }
 
 async function createIdentity(): Promise<AssetResolutionIdentity> {
-  return buildAssetResolutionIdentity('123456', new Request('https://proxy.test/assets/123456'), false);
+  return buildAssetResolutionIdentity('123456', new Request('https://proxy.test/v1/assets/123456'), false);
 }
 
 describe('asset coordinator client', () => {

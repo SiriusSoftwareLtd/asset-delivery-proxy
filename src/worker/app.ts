@@ -49,7 +49,7 @@ app.get('/health', (c) => c.text('OK', 200));
 
 app.all('/', (c) => c.redirect('https://docs.sirius.menu/rayfield-gen2', 302));
 
-app.route('/v1', registerRoutes());
+app.route('/', registerRoutes());
 
 /**
  * Logs uncaught errors once and returns a consistent public response.

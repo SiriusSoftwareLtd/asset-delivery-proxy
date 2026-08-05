@@ -13,7 +13,7 @@ describe('Roblox asset delivery helpers', () => {
   });
 
   test('only forwards allowlisted v2 query parameters and headers', () => {
-    const request = new Request('https://proxy.test/assets/123?assetVersionId=5&unknown=drop', {
+    const request = new Request('https://proxy.test/v1/assets/123?assetVersionId=5&unknown=drop', {
       headers: {
         'Roblox-Place-Id': '42',
         'X-Unknown': 'drop',

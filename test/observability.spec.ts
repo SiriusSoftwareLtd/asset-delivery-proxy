@@ -30,7 +30,7 @@ function createEnv(reportLevel?: string): CloudflareBindings {
 }
 
 function request(assetId: string, headers: Record<string, string> = {}) {
-  return new Request(`https://proxy.test/assets/${assetId}`, { headers });
+  return new Request(`https://proxy.test/v1/assets/${assetId}`, { headers });
 }
 
 describe('observability report levels', () => {

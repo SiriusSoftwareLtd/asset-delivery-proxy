@@ -124,7 +124,7 @@ function fakeCoordinator(result: AssetResolutionResult): CloudflareBindings['ASS
 }
 
 function request(assetId: string, init: RequestInit = {}) {
-  return new Request(`https://proxy.test/assets/${assetId}`, {
+  return new Request(`https://proxy.test/v1/assets/${assetId}`, {
     ...init,
     headers: {
       'X-Rayfield-Secure-Mode': 'true',
@@ -134,7 +134,7 @@ function request(assetId: string, init: RequestInit = {}) {
 }
 
 function batchRequest(body: unknown, headers: Record<string, string> = {}) {
-  return new Request('https://proxy.test/assets/batch', {
+  return new Request('https://proxy.test/v1/assets/batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Rayfield-Secure-Mode': 'true', ...headers },
     body: JSON.stringify(body),
@@ -501,7 +501,7 @@ describe('asset delivery', () => {
 
   test('batch rejects invalid requests and checks secure mode before parsing or processing', async () => {
     const cases = [
-      new Request('https://proxy.test/assets/batch', {
+      new Request('https://proxy.test/v1/assets/batch', {
         method: 'POST',
         headers: { 'X-Rayfield-Secure-Mode': 'true' },
         body: '{not-json',

@@ -10,7 +10,7 @@ import { handleAssetBatchRequest, handleAssetDelivery } from './assetDelivery';
 import { handleIconBatchRequest, handleIconRequest } from './icons';
 
 export function registerRoutes(): Hono<AppEnvironment> {
-  const api = new Hono<AppEnvironment>();
+  const api = new Hono<AppEnvironment>().basePath('/v1');
   api.post('/assets/batch', handleAssetBatchRequest);
   api.get('/assets/:assetId', handleAssetDelivery);
   api.get('/icons/:iconPack/:iconName', handleIconRequest);

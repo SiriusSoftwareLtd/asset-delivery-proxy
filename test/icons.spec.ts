@@ -38,11 +38,11 @@ function createTestEnv(assetCache = createCache()) {
 }
 
 function request(path: string) {
-  return new Request(`https://proxy.test${path}`);
+  return new Request(`https://proxy.test/v1${path}`);
 }
 
 function batchRequest(body: unknown) {
-  return new Request('https://proxy.test/icon/batch', {
+  return new Request('https://proxy.test/v1/icons/batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -437,7 +437,7 @@ describe('icon delivery', () => {
   });
 
   test.each([
-    new Request('https://proxy.test/icon/batch', {
+    new Request('https://proxy.test/v1/icons/batch', {
       method: 'POST',
       body: '{not-json',
     }),
