@@ -18,6 +18,7 @@ export default defineConfig({
     }),
   ],
   test: {
+    silent: 'passed-only',
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html'],
