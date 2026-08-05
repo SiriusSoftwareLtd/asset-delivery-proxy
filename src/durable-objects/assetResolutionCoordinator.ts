@@ -373,17 +373,44 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     };
   }
 
-  private acquirePermit(deadline: number): Promise<Permit> {
+  private async acquirePermit(deadline: number): Promise<Permit> {
     const now = Date.now();
-    if (now >= deadline) return Promise.reject(new PermitDeadlineError('Asset resolution deadline reached'));
-    if (this.cooldownUntil > now) {
-      return Promise.reject(new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000))));
+
+    if (now >= deadline) {
+      throw new PermitDeadlineError('Asset resolution deadline reached');
     }
-    return this.permitQueue.acquire(deadline).catch((error) => {
-      if (error instanceof AssetResolutionPermitDeadlineError) throw new PermitDeadlineError(error.message);
-      if (error instanceof AssetResolutionQueueFullError) throw new QueueFullError(error.message);
+
+    if (this.cooldownUntil > now) {
+      throw new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000)));
+    }
+
+    let permit: Permit;
+
+    try {
+      permit = await this.permitQueue.acquire(deadline);
+    } catch (error) {
+      if (error instanceof AssetResolutionPermitDeadlineError) {
+        throw new PermitDeadlineError(error.message);
+      }
+
+      if (error instanceof AssetResolutionQueueFullError) {
+        throw new QueueFullError(error.message);
+      }
+
       throw error;
-    });
+    }
+
+    // A different request may have received a 429 while this permit
+    // was waiting for its scheduled grant time.
+    const grantedAt = Date.now();
+
+    if (this.cooldownUntil > grantedAt) {
+      this.releasePermit();
+
+      throw new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - grantedAt) / 1_000)));
+    }
+
+    return permit;
   }
 
   private releasePermit(): void {

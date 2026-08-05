@@ -6,10 +6,10 @@ import type { Permit } from '../src/durable-objects/assetResolutionCoordinator';
 import { AssetResolutionPermitDeadlineError } from '../src/durable-objects/assetResolutionPermitQueue';
 
 type CoordinatorInternals = {
+  cooldownUntil: number;
   resolveUncoalesced(request: AssetCoordinatorRequest): Promise<AssetResolutionResult>;
 
   acquirePermit(deadline: number): Promise<Permit>;
-
   releasePermit(): void;
 
   permitQueue: {
@@ -389,5 +389,39 @@ describe('asset resolution coordinator internals', () => {
     } finally {
       await env.assetCache.delete(identity.physicalKey);
     }
+  });
+
+  test('releases a scheduled permit when cooldown begins before grant', async () => {
+    const stub = createStub('permit-cooldown-after-scheduling');
+
+    await runInDurableObject(stub, async (instance) => {
+      const coordinator = instance as unknown as CoordinatorInternals;
+
+      const originalAcquire = coordinator.permitQueue.acquire.bind(coordinator.permitQueue);
+      const releasePermit = vi.spyOn(coordinator, 'releasePermit');
+
+      coordinator.cooldownUntil = 0;
+
+      vi.spyOn(coordinator.permitQueue, 'acquire').mockImplementation(async () => {
+        // Simulate another request receiving a 429 while this
+        // permit is waiting for its scheduled grant.
+        coordinator.cooldownUntil = Date.now() + 5_000;
+
+        return {
+          queueTimeMs: 100,
+        };
+      });
+
+      try {
+        await expect(coordinator.acquirePermit(Date.now() + 10_000)).rejects.toThrow(
+          'Roblox asset delivery is cooling down',
+        );
+
+        expect(releasePermit).toHaveBeenCalledTimes(1);
+      } finally {
+        coordinator.permitQueue.acquire = originalAcquire;
+        coordinator.cooldownUntil = 0;
+      }
+    });
   });
 });
