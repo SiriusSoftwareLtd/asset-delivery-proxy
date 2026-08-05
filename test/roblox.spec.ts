@@ -12,6 +12,12 @@ describe('Roblox asset delivery helpers', () => {
     expect(buildRobloxV1Url('123 456')).toContain('id=123%20456');
   });
 
+  test('parses a future Retry-After HTTP date', () => {
+    const now = Date.parse('2026-08-04T12:00:00Z');
+
+    expect(parseRetryAfter('Tue, 04 Aug 2026 12:00:05 GMT', now)).toBe(5);
+  });
+
   test('only forwards allowlisted v2 query parameters and headers', () => {
     const request = new Request('https://proxy.test/v1/assets/123?assetVersionId=5&unknown=drop', {
       headers: {
