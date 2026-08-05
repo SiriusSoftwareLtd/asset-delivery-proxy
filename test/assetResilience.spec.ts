@@ -181,4 +181,541 @@ describe('asset resilience primitives', () => {
       env.assetCache.delete(laterIdentity.physicalKey),
     ]);
   });
+  test('negative-caches a coordinator 404 and serves the next request from KV', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`negative-cache-${assetId}`);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 404 }));
+
+    try {
+      const first = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: false,
+      });
+
+      const second = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: false,
+      });
+
+      expect(first).toEqual(
+        expect.objectContaining({
+          kind: 'not-found',
+          status: 404,
+          attempts: 1,
+          origin: 'upstream',
+          cacheWrite: 'written',
+        }),
+      );
+
+      expect(second).toEqual(
+        expect.objectContaining({
+          kind: 'not-found',
+          status: 404,
+          attempts: 0,
+          origin: 'kv',
+          cacheWrite: 'not-attempted',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('uses the fallback cooldown when Roblox omits Retry-After', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`fallback-cooldown-${assetId}`);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 429 }));
+
+    try {
+      const first = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: true,
+      });
+
+      const second = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: true,
+      });
+
+      expect(first).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 429,
+          retryAfter: 30,
+          attempts: 1,
+          origin: 'upstream',
+        }),
+      );
+
+      expect(second).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 429,
+          attempts: 0,
+          origin: 'admission',
+        }),
+      );
+
+      if (second.kind !== 'error' || second.status !== 429) {
+        throw new Error('Expected coordinator admission cooldown response');
+      }
+
+      expect(second.retryAfter).toBeGreaterThan(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('rejects an empty successful upstream asset', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`empty-${assetId}`);
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(null, {
+          status: 200,
+          headers: { 'Content-Type': 'image/png' },
+        }),
+    );
+
+    try {
+      const result = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: false,
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 502,
+          error: 'Roblox returned an empty asset',
+          attempts: 1,
+          origin: 'upstream',
+          upstreamStatus: 200,
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('does not retry a retryable status when backpressure is disabled', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`no-retry-${assetId}`);
+
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response('unavailable', { status: 503 }));
+
+    try {
+      const result = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: false,
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 503,
+          upstreamStatus: 503,
+          attempts: 1,
+          origin: 'upstream',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('rejects excess callers when the coordinator queue is full', async () => {
+    const assetIds = Array.from({ length: 34 }, () => uniqueAssetId());
+
+    const identities = await Promise.all(
+      assetIds.map((assetId) =>
+        buildAssetResolutionIdentity(assetId, new Request(`https://proxy.test/assets/${assetId}`), false),
+      ),
+    );
+
+    await Promise.all(identities.map((identity) => env.assetCache.delete(identity.physicalKey)));
+
+    const firstAssetId = assetIds[0];
+
+    if (!firstAssetId) {
+      throw new Error('Expected at least one asset ID');
+    }
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`queue-full-${firstAssetId}`);
+
+    let releaseFetch: (() => void) | undefined;
+
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await fetchGate;
+
+      return new Response(new Uint8Array([1]), {
+        headers: { 'Content-Type': 'image/png' },
+      });
+    });
+
+    try {
+      const firstIdentity = identities[0];
+
+      if (!firstIdentity) {
+        throw new Error('Expected at least one asset identity');
+      }
+
+      const active = stub.resolve({
+        identity: firstIdentity,
+        deadline: Date.now() + 10_000,
+        backpressure: true,
+      });
+
+      await vi.waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+
+      const queueDeadline = Date.now() + 1_000;
+
+      const contenders = identities.slice(1).map((identity) =>
+        stub.resolve({
+          identity,
+          deadline: queueDeadline,
+          backpressure: true,
+        }),
+      );
+
+      const results = await Promise.all(contenders);
+
+      expect(results.filter((result) => result.status === 503)).toHaveLength(1);
+      expect(results.filter((result) => result.status === 504)).toHaveLength(32);
+
+      // No queued caller should reach Roblox.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      releaseFetch?.();
+
+      expect(await active).toEqual(
+        expect.objectContaining({
+          kind: 'asset',
+          status: 200,
+        }),
+      );
+    } finally {
+      releaseFetch?.();
+      fetchMock.mockRestore();
+
+      await Promise.all(identities.map((identity) => env.assetCache.delete(identity.physicalKey)));
+    }
+  });
+
+  test('serves a sequential coordinator request from fresh KV', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`fresh-kv-${assetId}`);
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            'Content-Type': 'image/png',
+          },
+        }),
+    );
+
+    try {
+      const first = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: false,
+      });
+
+      expect(first).toEqual(
+        expect.objectContaining({
+          kind: 'asset',
+          status: 200,
+          attempts: 1,
+          origin: 'upstream',
+          cacheWrite: 'written',
+        }),
+      );
+
+      const second = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: false,
+      });
+
+      expect(second).toEqual(
+        expect.objectContaining({
+          kind: 'asset',
+          status: 200,
+          attempts: 0,
+          origin: 'kv',
+          cacheWrite: 'not-attempted',
+        }),
+      );
+
+      if (second.kind !== 'asset') {
+        throw new Error('Expected cached asset result');
+      }
+
+      expect(second.data).toEqual(new Uint8Array([1, 2, 3]));
+      expect(second.contentType).toBe('image/png');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('rejects a permit when the next scheduled grant is after its deadline', async () => {
+    const firstAssetId = uniqueAssetId();
+    const secondAssetId = uniqueAssetId();
+
+    const firstIdentity = await buildAssetResolutionIdentity(
+      firstAssetId,
+      new Request(`https://proxy.test/assets/${firstAssetId}`),
+      false,
+    );
+
+    const secondIdentity = await buildAssetResolutionIdentity(
+      secondAssetId,
+      new Request(`https://proxy.test/assets/${secondAssetId}`),
+      false,
+    );
+
+    await Promise.all([
+      env.assetCache.delete(firstIdentity.physicalKey),
+      env.assetCache.delete(secondIdentity.physicalKey),
+    ]);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`scheduled-deadline-${firstAssetId}`);
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1]), {
+          headers: {
+            'Content-Type': 'image/png',
+          },
+        }),
+    );
+
+    try {
+      const first = await stub.resolve({
+        identity: firstIdentity,
+        deadline: Date.now() + 10_000,
+        backpressure: true,
+      });
+
+      expect(first).toEqual(
+        expect.objectContaining({
+          kind: 'asset',
+          status: 200,
+        }),
+      );
+
+      // The configured permit interval is much longer than this deadline.
+      const second = await stub.resolve({
+        identity: secondIdentity,
+        deadline: Date.now() + 100,
+        backpressure: true,
+      });
+
+      expect(second).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 504,
+          error: 'Roblox asset delivery timed out',
+          attempts: 0,
+          origin: 'admission',
+        }),
+      );
+
+      // The second request must never reach Roblox.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+
+      await Promise.all([
+        env.assetCache.delete(firstIdentity.physicalKey),
+        env.assetCache.delete(secondIdentity.physicalKey),
+      ]);
+    }
+  });
+
+  test('rejects queued callers when an active request enters cooldown', async () => {
+    const assetIds = Array.from({ length: 34 }, () => uniqueAssetId());
+
+    const identities = await Promise.all(
+      assetIds.map((assetId) =>
+        buildAssetResolutionIdentity(assetId, new Request(`https://proxy.test/assets/${assetId}`), false),
+      ),
+    );
+
+    await Promise.all(identities.map((identity) => env.assetCache.delete(identity.physicalKey)));
+
+    const firstIdentity = identities[0];
+
+    if (!firstIdentity) {
+      throw new Error('Expected an active asset identity');
+    }
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`queued-cooldown-${firstIdentity.assetId}`);
+
+    let releaseFetch: (() => void) | undefined;
+
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await fetchGate;
+
+      return new Response(null, {
+        status: 429,
+        headers: {
+          'Retry-After': '5',
+        },
+      });
+    });
+
+    try {
+      const active = stub.resolve({
+        identity: firstIdentity,
+        deadline: Date.now() + 15_000,
+        backpressure: true,
+      });
+
+      await vi.waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+
+      const contenderPromises = identities.slice(1).map((identity) =>
+        stub.resolve({
+          identity,
+          deadline: Date.now() + 10_000,
+          backpressure: true,
+        }),
+      );
+
+      // 32 callers fit in the queue and one caller should fail immediately
+      // because the configured queue limit is 32.
+      const firstSettled = await Promise.race(contenderPromises);
+
+      expect(firstSettled).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 503,
+          origin: 'admission',
+        }),
+      );
+
+      // The queue is now populated. Let the active request receive its 429.
+      releaseFetch?.();
+
+      const [activeResult, contenderResults] = await Promise.all([active, Promise.all(contenderPromises)]);
+
+      expect(activeResult).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 429,
+          retryAfter: 5,
+          attempts: 1,
+          origin: 'upstream',
+        }),
+      );
+
+      expect(contenderResults.filter((result) => result.status === 503)).toHaveLength(1);
+
+      expect(
+        contenderResults.filter(
+          (result) => result.kind === 'error' && result.status === 429 && result.origin === 'admission',
+        ),
+      ).toHaveLength(32);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFetch?.();
+      fetchMock.mockRestore();
+
+      await Promise.all(identities.map((identity) => env.assetCache.delete(identity.physicalKey)));
+    }
+  });
+
+  test('returns a single upstream rejection when backpressure is disabled', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`network-rejection-${assetId}`);
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network unavailable'));
+
+    try {
+      const result = await stub.resolve({
+        identity,
+        deadline: Date.now() + 10_000,
+        backpressure: false,
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          kind: 'error',
+          status: 502,
+          error: 'Unable to reach Roblox asset delivery',
+          attempts: 1,
+          origin: 'upstream',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
 });
