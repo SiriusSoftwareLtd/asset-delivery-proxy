@@ -40,9 +40,8 @@ export type AssetDeliveryResult =
       extension?: string;
       cacheStatus: CacheStatus;
       cacheHit: boolean;
-      timestamp?: number;
+      timestamp: number;
       upstreamStatus?: number;
-      retryAfter?: number;
     }
   | {
       assetId: string;

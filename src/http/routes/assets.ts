@@ -19,8 +19,7 @@ function resultToResponse(c: AppContext, result: AssetDeliveryResult): Response 
       ...(result.extension ? { 'X-Asset-Extension': result.extension } : {}),
       'X-Cache-Hit': result.cacheHit ? 'true' : 'false',
       'X-Cache-Status': result.cacheStatus,
-      ...(result.retryAfter !== undefined ? { 'Retry-After': result.retryAfter.toString() } : {}),
-      ...(result.timestamp !== undefined ? { 'X-Cache-Timestamp': result.timestamp.toString() } : {}),
+      'X-Cache-Timestamp': result.timestamp.toString(),
     });
   if (result.kind === 'not-found')
     return c.json({ error: result.error, requestId: c.get('requestId') }, 404, {
@@ -43,7 +42,9 @@ function resultToResponse(c: AppContext, result: AssetDeliveryResult): Response 
 }
 
 export async function handleAssetDelivery(c: AppContext): Promise<Response> {
-  return resultToResponse(c, await fetchAsset(c.req.param('assetId') ?? '', c, c.req.raw));
+  const assetId = c.req.param('assetId') as string;
+
+  return resultToResponse(c, await fetchAsset(assetId, c, c.req.raw));
 }
 
 export async function handleAssetBatchRequest(c: AppContext): Promise<Response> {
