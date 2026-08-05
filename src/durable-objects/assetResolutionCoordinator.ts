@@ -347,6 +347,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     }
 
     // impossible to reach here
+    /* istanbul ignore next -- @preserve */
     return Promise.reject(new Error('Unexpected error'));
   }
 
