@@ -40,12 +40,15 @@ function isValidBatchItem(value: unknown): value is IconBatchItem {
 }
 
 export async function handleIconRequest(c: AppContext): Promise<Response> {
-  const iconPack = c.req.param('iconPack') ?? '';
-  const iconName = c.req.param('iconName') ?? '';
+  const iconPack = c.req.param('iconPack') as string;
+  const iconName = c.req.param('iconName') as string;
+
   const result = await fetchIcon(iconPack, iconName, new URL(c.req.url).searchParams, c);
+
   c.header('X-Icon-Pack', iconPack);
   c.set('cacheStatus', result.kind === 'icon' ? result.cacheStatus : 'unknown');
-  if (result.kind === 'icon')
+
+  if (result.kind === 'icon') {
     return c.body(result.data, 200, {
       'Content-Type': result.contentType,
       'Cache-Control': 'public, max-age=86400, stale-while-revalidate=300',
@@ -53,6 +56,8 @@ export async function handleIconRequest(c: AppContext): Promise<Response> {
       'X-Cache-Status': result.cacheStatus,
       'X-Cache-Timestamp': String(result.timestamp),
     });
+  }
+
   return errorResponse(c, result.error, result.status);
 }
 
