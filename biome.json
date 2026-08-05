@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/@biomejs/biome/configuration_schema.json",
   "files": {
-    "includes": ["src/**/*.ts", "test/**/*.ts", "!worker-configuration.d.ts"]
+    "includes": ["**/*.ts", "**/*.mts", "**/*.json", "**/*.jsonc", "!worker-configuration.d.ts"]
   },
   "vcs": {
     "enabled": true,
@@ -35,7 +35,9 @@
   },
   "formatter": {
     "indentStyle": "space",
-    "lineWidth": 120
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "lineEnding": "lf"
   },
   "javascript": {
     "parser": {

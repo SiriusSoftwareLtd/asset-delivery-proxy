@@ -1,302 +1,279 @@
 # Asset Delivery Proxy
 
-A Cloudflare Worker that serves Rayfield's Roblox assets and icon resources through a controlled delivery layer. It validates asset requests, applies layered caching and bounded upstream coordination, renders supported SVG icon packs to PNG, and serves Rayfield's own registry-backed PNG icons directly.
+A Cloudflare Worker that provides Rayfield Gen2 with a controlled asset and icon delivery layer.
+
+The service validates asset requests, proxies Roblox asset delivery, applies layered caching and bounded upstream coordination, renders supported SVG icon packs to PNG, and serves Rayfield's registry-backed PNG icons.
 
 ## Features
 
-- Serves Roblox assets from `GET /assets/:assetId`.
-- Serves ordered batches of Roblox assets from `POST /assets/batch`.
-- Serves icons from `GET /icons/:iconPack/:iconName`.
-- Serves ordered batches of icons from `POST /icon/batch`.
-- Supports Lucide, Feather, Remix Icon, Font Awesome, Heroicons, and Rayfield icon packs.
+- Proxies Roblox assets through controlled request paths.
+- Supports single and batch asset requests.
+- Serves icons from Lucide, Feather, Remix Icon, Font Awesome, Heroicons, and Rayfield.
 - Renders supported SVG icon sources to PNG with `resvg`.
-- Serves Rayfield's own allowlisted PNG assets directly without SVG rendering.
-- Caches generated and source PNG icons in Workers KV for 24 hours.
-- Rejects malformed asset IDs and asset requests that do not opt into secure mode.
-- Supports Roblox Asset Delivery v1 and an opt-in v2 path controlled by Cloudflare Flagship.
-- Uses the Cache API for fresh, data-center-local asset bytes and Workers KV as the authoritative seven-day asset cache.
-- Serves positive asset entries as fresh for 24 hours, then stale while a Durable Object-coalesced background refresh runs; 404 responses remain negatively cached for five minutes.
-- Coalesces identical cold asset resolutions and applies bounded upstream admission through hash-sharded Durable Objects when the foreground coordinator rollout is enabled.
-- Preserves Roblox upstream content types and returns a detected `X-Asset-Extension` when available.
-- Emits structured logs, request IDs, cache-status headers, and tracing attributes.
+- Serves allowlisted Rayfield PNG assets without SVG rendering.
+- Uses the Cache API and Workers KV for layered asset caching.
+- Uses Durable Objects to coalesce and regulate upstream asset requests.
+- Supports negative caching and stale-while-refresh asset delivery.
+- Applies request validation, upstream timeouts, response-size limits, and rate limiting.
+- Emits structured logs, request IDs, cache metadata, metrics, and tracing data.
+- Supports controlled feature rollout through Cloudflare Flagship.
 
 ## Requirements
 
-- Node.js 20 or later
+- Node.js 24
 - pnpm
 - A Cloudflare account for local remote bindings or deployment
 
 ## Getting started
 
+Install dependencies:
+
 ```sh
 pnpm install
+```
+
+Run the test suite:
+
+```sh
 pnpm test
+```
+
+Start Wrangler development mode with local observability enabled:
+
+```sh
 pnpm dev
 ```
 
-`pnpm dev` starts Wrangler with local observability enabled. The test suite uses the Cloudflare Workers Vitest pool and the bindings declared in `wrangler.jsonc`.
+The Worker uses the bindings declared in [`wrangler.jsonc`](./wrangler.jsonc).
+
+Use resources from your own Cloudflare account when testing a fork or separate deployment. Do not commit credentials, private asset data, or production resource configuration.
 
 ## API
 
-### Assets
+The Worker exposes endpoints for single and batch Roblox asset delivery, icon rendering, and health checks.
+
+| Method | Endpoint                     | Description                              |
+| ------ | ---------------------------- | ---------------------------------------- |
+| `GET`  | `/health`                    | Check Worker health.                     |
+| `GET`  | `/assets/:assetId`           | Fetch a single Roblox asset.             |
+| `POST` | `/assets/batch`              | Fetch an ordered batch of Roblox assets. |
+| `GET`  | `/icons/:iconPack/:iconName` | Fetch a single icon as PNG.              |
+| `POST` | `/icon/batch`                | Fetch an ordered batch of icons.         |
+
+Asset delivery requests require secure mode:
 
 ```http
-GET /assets/:assetId
 X-Rayfield-Secure-Mode: true
 ```
 
-`assetId` must be a decimal Roblox asset ID of up to 20 digits. The secure-mode header is required; requests without it receive `403 Forbidden`.
+See [`docs/api.md`](./docs/api.md) for the complete API contract, including:
 
-Successful responses include the asset bytes and these useful headers:
+- Request formats.
+- Validation rules.
+- Batch limits and semantics.
+- Supported icon providers and options.
+- Response headers.
+- Error responses and status codes.
+- Asset and icon caching behavior.
+- Upstream safeguards.
 
-| Header | Meaning |
-| --- | --- |
-| `X-Request-ID` | Request correlation ID. |
-| `X-Cache-Hit` | Whether the response was served from cache. |
-| `X-Cache-Status` | Cache outcome, including `l1-hit`, `kv-fresh-hit`, `stale-hit`, `miss`, or `negative-hit`. |
-| `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or fetched response. |
-| `X-Asset-Extension` | Detected asset filename extension, when known. |
+## Configuration
 
-Throttled and queue-rejected responses include `Retry-After`. With lazy miss limiting enabled, fresh, stale, and negative-cache hits do not consume the per-client Rate Limiting binding. A batch makes at most one client-limit decision after its cache lookups.
+Worker configuration lives in [`wrangler.jsonc`](./wrangler.jsonc).
 
-### Batch assets
+Repository-local operational documentation covers configuration that must stay synchronized with the deployed Worker:
 
-```http
-POST /assets/batch
-X-Rayfield-Secure-Mode: true
-Content-Type: application/json
-```
+- [`docs/runtime-configuration.md`](./docs/runtime-configuration.md) — bindings, variables, secrets, and runtime configuration.
+- [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) — asset resilience and rollout flags.
+- [`docs/cd-secrets.md`](./docs/cd-secrets.md) — production deployment credentials and GitHub environment requirements.
+- [`docs/api.md`](./docs/api.md) — public HTTP API behavior.
 
-The JSON body must contain between 1 and 25 decimal asset IDs, each up to 20 digits:
+### Secrets
 
-```json
-{ "assetIds": ["101", "202"] }
-```
+Do not commit API keys, Cloudflare tokens, production credentials, or private verification fixtures.
 
-A valid batch returns `200` and preserves input order. Each successful item contains the asset bytes as base64 in `dataBase64`, along with `contentType`, an optional `extension`, `cacheStatus`, and `cacheHit`.
-
-Failed items contain their individual HTTP `status`, `cacheStatus`, `cacheHit`, and `error`; one item failing does not fail the whole batch. Malformed JSON, an invalid body, an empty or over-25 list, or an invalid asset ID returns `400`. Missing secure mode returns `403` before processing items.
-
-Batch processing allows at most six caller-side asset operations at once and groups duplicate canonical identities before coordinator admission.
-
-### Icons
-
-```http
-GET /icons/:iconPack/:iconName
-```
-
-Supported icon packs are:
-
-| Pack | Source | Options |
-| --- | --- | --- |
-| `lucide` | Lucide SVGs | `size` |
-| `feather` | Feather SVGs | `size` |
-| `remix` | Remix Icon SVGs | `size`, required `category` |
-| `font-awesome` | Font Awesome SVGs | `size`, optional `style` |
-| `hero` | Heroicons SVGs | `size`, optional `sourceSize`, optional `style` |
-| `rayfield` | Rayfield Gen 2 PNG assets | None |
-
-Icon names may contain lowercase letters, numbers, hyphens, and underscores.
-
-#### SVG-backed packs
-
-Lucide, Feather, Remix Icon, Font Awesome, and Heroicons are fetched as SVG and rendered to PNG with `resvg`.
-
-The `size` option controls the output width, defaults to `64`, and must be an integer from `1` through `1024`.
-
-Examples:
-
-```http
-GET /icons/lucide/circle-check
-GET /icons/lucide/circle-check?size=128
-GET /icons/remix/home?category=Buildings
-GET /icons/font-awesome/circle?style=brands
-GET /icons/hero/academic-cap?sourceSize=20&style=solid&size=128
-```
-
-Provider-specific options:
-
-- Remix Icon requires `category`. Supported categories are `Arrows`, `Buildings`, `Business`, `Communication`, `Design`, `Development`, `Device`, `Document`, `Editor`, `Finance`, `Games & Sports`, `Health & Medical`, `Logos`, `Map`, `Media`, `Others`, `System`, `User & Faces`, and `Weather`.
-- Font Awesome `style` may be `brands`, `regular`, or `solid` and defaults to `solid`.
-- Heroicons `sourceSize` may be `16`, `20`, or `24` and defaults to `24`.
-- Heroicons `style` may be `outline` or `solid` and defaults to `outline`.
-- Heroicons source sizes `16` and `20` only support `solid`; source size `24` supports both styles.
-
-SVG source responses are bounded to 512 KiB and upstream icon requests time out after 10 seconds.
-
-#### Rayfield icons
-
-Rayfield icons are served from the allowlisted PNG assets in the `SiriusSoftwareLtd/rayfield-gen2` repository. They bypass SVG fetching and `resvg` rendering.
-
-```http
-GET /icons/rayfield/check
-GET /icons/rayfield/settings
-GET /icons/rayfield/rayfield
-```
-
-Supported Rayfield icon names are:
-
-- `close`
-- `minimise`
-- `maximise`
-- `settings`
-- `search`
-- `chevron`
-- `check`
-- `dot`
-- `colorpicker`
-- `banner`
-- `config`
-- `rayfield`
-
-Rayfield icon requests do not accept query options. A request such as `GET /icons/rayfield/check?size=64` returns `400`.
-
-Rayfield PNG source responses are limited to 256 KiB and use the same 10-second upstream timeout as SVG-backed packs. Rayfield cache entries use the underlying asset ID as their identity, so aliases that point to the same asset, such as `dot` and `colorpicker`, share one cached PNG.
-
-#### Icon responses
-
-Successful icon requests return PNG bytes and include:
-
-| Header | Meaning |
-| --- | --- |
-| `Content-Type` | Always `image/png`. |
-| `Cache-Control` | Public caching for 24 hours with a 5-minute stale-while-revalidate window. |
-| `X-Request-ID` | Request correlation ID. |
-| `X-Icon-Pack` | Requested icon pack. |
-| `X-Cache-Hit` | Whether the icon came from the icon cache. |
-| `X-Cache-Status` | Icon cache result, such as `hit`, `miss`, `read-error`, or `write-error`. |
-| `X-Cache-Timestamp` | Unix timestamp in milliseconds for the cached or generated icon. |
-
-Icon responses use these status codes:
-
-| Status | Meaning |
-| --- | --- |
-| `200` | Icon returned successfully. |
-| `400` | Invalid pack, icon name, size, provider option, or unsupported Rayfield query option. |
-| `404` | The requested icon does not exist. |
-| `502` | The icon source failed, returned an invalid response, exceeded a source-size limit, or rendering failed. |
-| `504` | The upstream icon source timed out. |
-
-Errors use a JSON body containing `error` and `requestId`.
-
-### Batch icons
-
-```http
-POST /icon/batch
-Content-Type: application/json
-```
-
-The JSON body must contain between 1 and 50 icon requests. Each item must contain `iconPack`, `iconName`, and an `options` object whose values are strings:
-
-```json
-{
-  "icons": [
-    {
-      "iconPack": "lucide",
-      "iconName": "circle-check",
-      "options": { "size": "64" }
-    },
-    {
-      "iconPack": "hero",
-      "iconName": "academic-cap",
-      "options": {
-        "sourceSize": "20",
-        "style": "solid",
-        "size": "128"
-      }
-    },
-    {
-      "iconPack": "rayfield",
-      "iconName": "check",
-      "options": {}
-    }
-  ]
-}
-```
-
-The same provider validation and defaults as the single-icon route apply. Rayfield items must use an empty `options` object.
-
-A structurally valid batch returns `200` and preserves input order even when individual items fail. Successful items contain the PNG as base64 in `dataBase64`, along with `contentType`, `cacheStatus`, and `cacheHit`. Failed items contain their own `status` and `error`.
-
-For example, a non-existent icon produces a `404` result for that item without failing the whole batch.
-
-Malformed JSON, malformed body or item structure, an empty list, or more than 50 items returns an outer `400`. Batch processing allows at most six active icon operations at once.
-
-## Icon source safeguards
-
-Icon delivery applies bounded upstream handling before data is cached or returned:
-
-- SVG source responses are limited to 512 KiB.
-- Rayfield PNG source responses are limited to 256 KiB.
-- Upstream icon requests time out after 10 seconds.
-- SVG responses are checked for an accepted content type and SVG content before rendering.
-- Rayfield PNG responses must use the `image/png` content type when one is supplied.
-- Upstream 404 responses map to `404 Icon not found`.
-- Other upstream or rendering failures map to `502`.
-- Upstream timeouts map to `504`.
-
-## Configuration and deployment
-
-The Worker configuration is in [`wrangler.jsonc`](./wrangler.jsonc). See [`docs/runtime-configuration.md`](./docs/runtime-configuration.md) for the complete bindings, vars, secrets, and billing-impact reference.
-
-Resilience rolls out through `asset-cache-layered`, `asset-cache-hit-exempt-limit`, `asset-upstream-coordinator`, and `asset-upstream-backpressure`. `asset-upstream-coordinator` controls foreground cold-miss Durable Object routing, but stale background refreshes use `ASSET_RESOLUTION_COORDINATOR` once `asset-cache-layered` is enabled, unless the budget gate rejects the refresh at admission before any Durable Object work starts. Stale-refresh backpressure requires both `asset-upstream-coordinator` and `asset-upstream-backpressure`. The existing `use-asset-delivery-v2` flag remains independent. Disabling each flag restores the preceding foreground path without changing public routes. See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete flag map.
-
-Before deploying a fork, create equivalent Cloudflare resources and replace the binding identifiers in `wrangler.jsonc` with identifiers from your account. Do not commit credentials or API tokens. Store `ROBLOX_API_KEY` with Wrangler secrets:
+Store the Roblox Open Cloud API key as a Wrangler secret:
 
 ```sh
 pnpm exec wrangler secret put ROBLOX_API_KEY
-pnpm deploy
 ```
 
-After deployment, run the production verifier against the deployed Worker:
+### Cloudflare binding types
 
-```sh
-cp scripts/verify-production.assets.example.json scripts/verify-production.assets.json
-ASSET_PROXY_URL=https://<your-worker-hostname> ROBLOX_API_KEY=<roblox-open-cloud-key> pnpm verify:production
-```
-
-Edit the ignored `scripts/verify-production.assets.json` file with between 1 and 25 private Roblox asset fixtures. Include at least one stable image asset and one stable font asset when possible so extension detection, byte comparison, cache headers, and batch delivery are exercised across both supported asset kinds.
-
-The verifier loads `.env` automatically, so `ASSET_PROXY_URL`, `ROBLOX_API_KEY`, and optional verifier settings can live there for local operator runs. Do not commit real asset IDs if they are private, API keys, or generated verification output.
-
-`pnpm verify:production` checks `/health`, secure-mode rejection, single asset delivery against Roblox Open Cloud, cache hit behavior, ordered `/assets/batch` delivery, and duplicate batch consistency. It requires `ASSET_PROXY_URL` to be HTTPS unless `ASSET_PROXY_ALLOW_HTTP=true` is set for non-production testing.
-
-Optional settings are `ASSET_PROXY_TEST_ASSETS_FILE`, `ASSET_PROXY_TIMEOUT_MS`, `ASSET_PROXY_CACHE_ATTEMPTS`, and `ASSET_PROXY_CACHE_DELAY_MS`.
-
-The CD workflow deploys the Worker from the `production` GitHub Actions environment after the `CI` workflow succeeds for a push to `main`, but only when that CI run's SHA is still the current `main` head. It verifies that condition before opening the deploy job and rechecks it immediately before `pnpm deploy` so a newer `main` commit cannot be overwritten by an older completed CI run.
-
-To intentionally skip automated deployment for a commit, put `[skip cd]` at the start or end of the commit message. See [`docs/cd-secrets.md`](./docs/cd-secrets.md) for the required GitHub environment secret and Cloudflare API token permissions.
-
-Generate binding types after changing `wrangler.jsonc`:
+Regenerate Cloudflare binding types after changing `wrangler.jsonc`:
 
 ```sh
 pnpm cf-typegen
 ```
 
+Commit the resulting `worker-configuration.d.ts` update with the configuration change.
+
+## Asset resilience
+
+Asset delivery uses layered caching and optional upstream coordination.
+
+The current resilience system includes:
+
+- Cloudflare Cache API as a data-center-local L1 cache.
+- Workers KV as the persistent asset cache.
+- Fresh positive asset entries for 24 hours.
+- Stale delivery with background refresh.
+- Five-minute negative caching for supported `404` responses.
+- Durable Object request coalescing.
+- Optional upstream admission control and backpressure.
+- Per-client rate limiting.
+- Feature-flagged rollout of resilience paths.
+
+Resilience behavior is controlled through:
+
+- `asset-cache-layered`
+- `asset-cache-hit-exempt-limit`
+- `asset-upstream-coordinator`
+- `asset-upstream-backpressure`
+- `use-asset-delivery-v2`
+
+See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete rollout model, dependencies, and fallback behavior.
+
+## Deployment
+
+Deploy the configured Worker with:
+
+```sh
+pnpm deploy
+```
+
+The CD workflow deploys from the `production` GitHub Actions environment after CI succeeds for a push to `main`.
+
+Before deployment, the workflow verifies that the tested commit is still the current `main` head. It performs the check again immediately before deployment so an older completed CI run cannot overwrite a newer revision.
+
+To prevent CD for a specific commit, place `[skip cd]` at the start or end of its commit message.
+
+See [`docs/cd-secrets.md`](./docs/cd-secrets.md) for the required GitHub environment configuration and Cloudflare permissions.
+
+## Production verification
+
+The repository includes a live production verification script.
+
+Create a local fixture file:
+
+```sh
+cp scripts/verify-production.assets.example.json scripts/verify-production.assets.json
+```
+
+Populate it with between 1 and 25 private Roblox asset fixtures.
+
+Include at least one stable image asset and one stable font asset when possible so extension detection, byte comparison, cache behavior, and batch delivery are exercised across supported asset kinds.
+
+Run the verifier with:
+
+```sh
+ASSET_PROXY_URL=https://<worker-hostname> \
+ROBLOX_API_KEY=<roblox-open-cloud-key> \
+pnpm verify:production
+```
+
+The verifier also loads `.env` automatically, so local operator settings can be stored there.
+
+Do not commit:
+
+- Real API keys.
+- Private asset IDs.
+- `scripts/verify-production.assets.json`.
+- Generated verification output.
+
+`pnpm verify:production` checks:
+
+- `/health`.
+- Secure-mode rejection.
+- Single asset delivery against Roblox Open Cloud.
+- Cache-hit behavior.
+- Ordered `/assets/batch` delivery.
+- Duplicate batch consistency.
+
+`ASSET_PROXY_URL` must use HTTPS unless `ASSET_PROXY_ALLOW_HTTP=true` is explicitly set for non-production testing.
+
+Optional verifier settings include:
+
+- `ASSET_PROXY_TEST_ASSETS_FILE`
+- `ASSET_PROXY_TIMEOUT_MS`
+- `ASSET_PROXY_CACHE_ATTEMPTS`
+- `ASSET_PROXY_CACHE_DELAY_MS`
+
 ## Development commands
 
-| Command | Description |
-| --- | --- |
-| `pnpm dev` | Start the Worker locally with observability enabled. |
-| `pnpm start` | Start Wrangler development mode. |
-| `pnpm test` | Run the Worker test suite. |
-| `pnpm typecheck` | Type-check the Worker and test projects. |
-| `pnpm lint` | Run Biome checks. |
-| `pnpm lint:fix` | Apply safe Biome fixes. |
-| `pnpm format` | Check formatting with Biome. |
-| `pnpm format:fix` | Apply Biome formatting. |
-| `pnpm cf-typegen` | Regenerate Cloudflare binding types. |
-| `pnpm deploy` | Deploy the configured Worker. |
-| `pnpm verify:production` | Run live post-deploy verification against a configured Worker and Roblox asset fixtures. |
+| Command                  | Description                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
+| `pnpm dev`               | Start the Worker locally with observability enabled.               |
+| `pnpm start`             | Start Wrangler development mode.                                   |
+| `pnpm test`              | Run the test suite.                                                |
+| `pnpm coverage`          | Run tests with coverage enforcement.                               |
+| `pnpm typecheck`         | Type-check maintained TypeScript projects.                         |
+| `pnpm lint`              | Run Biome checks.                                                  |
+| `pnpm lint:fix`          | Apply Biome lint fixes.                                            |
+| `pnpm format`            | Check formatting with Biome.                                       |
+| `pnpm format:fix`        | Apply Biome formatting.                                            |
+| `pnpm cf-typegen`        | Regenerate Cloudflare binding types.                               |
+| `pnpm deploy`            | Deploy the Worker.                                                 |
+| `pnpm verify:production` | Verify a deployed Worker against configured Roblox asset fixtures. |
+
+## Testing and quality
+
+Pull requests should pass:
+
+```sh
+pnpm typecheck
+pnpm lint
+pnpm coverage
+```
+
+CI runs type checking, Biome checks, and the coverage suite for pull requests and pushes to `main`.
+
+Coverage is enforced per source file.
+
+The test suite covers areas including:
+
+- Asset request validation.
+- Roblox upstream discovery and delivery.
+- Layered caching.
+- Cache corruption and failure handling.
+- Asset extension detection.
+- Durable Object coordination.
+- Admission control and backpressure.
+- Rate limiting.
+- Structured observability.
+- Icon provider validation.
+- SVG rendering.
+- Rayfield icon delivery.
+- Batch processing.
+- Upstream timeout and response-size handling.
+
+## Documentation
+
+Repository documentation is split by responsibility:
+
+| Document                                                           | Purpose                                                                              |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [`docs/api.md`](./docs/api.md)                                     | HTTP requests, responses, validation, providers, status codes, and caching behavior. |
+| [`docs/runtime-configuration.md`](./docs/runtime-configuration.md) | Cloudflare bindings, variables, secrets, and runtime settings.                       |
+| [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md)     | Asset resilience feature flags and rollout behavior.                                 |
+| [`docs/cd-secrets.md`](./docs/cd-secrets.md)                       | Production deployment credentials and GitHub environment configuration.              |
+
+Broader Rayfield documentation belongs in the Sirius documentation repository.
 
 ## Contributing
 
-Contributions are welcome. Read [Contributors.md](./Contributors.md) for the development workflow and pull-request expectations, and follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
+Contributions are welcome.
+
+Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before making a change and follow the [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
+
+Keep pull requests focused, include tests for behavior changes, and do not commit secrets or private configuration.
 
 ## Security
 
-Please report suspected vulnerabilities privately; see [SECURITY.md](./SECURITY.md). Do not open public issues for security reports.
+Do not report suspected vulnerabilities through public issues, discussions, or pull requests.
+
+Read [`SECURITY.md`](./SECURITY.md) and use GitHub Private Vulnerability Reporting.
 
 ## License
 
-A license has not yet been selected for this repository. Until one is added, do not assume permission to reuse or redistribute the code.
+This repository is licensed under the [Mozilla Public License Version 2.0](./LICENSE).

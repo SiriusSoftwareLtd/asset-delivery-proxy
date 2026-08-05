@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 Corridon Capital
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import { MAX_OUTPUT_SIZE } from './constants';
 import { IconError } from './errors';
 import { FONT_AWESOME_STYLES, REMIX_ICON_CATEGORIES } from './providers';

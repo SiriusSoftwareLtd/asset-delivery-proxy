@@ -1,0 +1,42 @@
+# Default owner for all repository changes
+* @MaxTCodes
+
+# GitHub configuration and automation
+/.github/ @MaxTCodes
+/.github/workflows/ @MaxTCodes
+/.github/dependabot.yml @MaxTCodes
+
+# Deployment and Cloudflare configuration
+/wrangler.jsonc @MaxTCodes
+/worker-configuration.d.ts @MaxTCodes
+
+# Dependency and tooling configuration
+/package.json @MaxTCodes
+/pnpm-lock.yaml @MaxTCodes
+/pnpm-workspace.yaml @MaxTCodes
+/biome.json @MaxTCodes
+/tsconfig.json @MaxTCodes
+/tsconfig.tools.json @MaxTCodes
+/vitest.config.mts @MaxTCodes
+
+# Security-sensitive application areas
+/src/durable-objects/ @MaxTCodes
+/src/middleware/ @MaxTCodes
+/src/services/ @MaxTCodes
+/src/observability/ @MaxTCodes
+
+# Public API routing and HTTP behavior
+/src/routes/ @MaxTCodes
+/src/http/ @MaxTCodes
+
+# Production verification tooling
+/scripts/ @MaxTCodes
+
+# Security and contribution policy
+/SECURITY.md @MaxTCodes
+/CODE_OF_CONDUCT.md @MaxTCodes
+/CONTRIBUTING.md @MaxTCodes
+/LICENSE @MaxTCodes
+
+# Operational and API documentation
+/docs/ @MaxTCodes
