@@ -4,11 +4,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { describe, expect, test, vi } from 'vitest';
+import type { AssetResolutionCoordinator } from '../../src';
 import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
-import { runInDurableObject } from 'cloudflare:test';
-import { AssetResolutionCoordinator } from '../../src';
 
 let assetIdSequence = 0;
 
