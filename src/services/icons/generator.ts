@@ -214,7 +214,10 @@ function renderPng(svgContent: Uint8Array, renderConfig: ResvgRenderOptions, rep
             const png = new Uint8Array(rendered.asPng());
 
             if (png.byteLength === 0) {
-              throw new Error('Renderer returned an empty PNG');
+              throw new IconError('EMPTY_PNG', 'Renderer returned an empty PNG', {
+                stage: 'render',
+                retryable: false,
+              });
             }
 
             span.setAttribute('png.bytes', png.byteLength);
