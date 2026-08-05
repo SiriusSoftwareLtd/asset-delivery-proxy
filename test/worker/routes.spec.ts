@@ -6,7 +6,7 @@
 
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import worker from './worker';
+import worker from '../worker';
 
 function createTestEnv(options: { rateLimit?: () => Promise<{ success: boolean }> } = {}): CloudflareBindings {
   return {

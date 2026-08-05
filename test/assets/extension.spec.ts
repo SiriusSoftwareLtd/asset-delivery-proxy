@@ -10,7 +10,7 @@ import {
   extensionFromPrefix,
   readPrefixAndRestoreBody,
   resolveAssetExtension,
-} from '../src/services/assets/extension';
+} from '../../src/services/assets/extension';
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 

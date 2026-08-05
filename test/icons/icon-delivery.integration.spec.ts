@@ -6,8 +6,8 @@
 
 import { env } from 'cloudflare:test';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { MAX_PNG_BYTES } from '../src/services/icons/constants';
-import worker from './worker';
+import { MAX_PNG_BYTES } from '../../src/services/icons/constants';
+import worker from '../worker';
 
 function createCache() {
   const values = new Map<string, { value: ArrayBuffer; metadata?: unknown }>();

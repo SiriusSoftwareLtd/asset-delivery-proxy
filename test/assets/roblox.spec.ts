@@ -7,7 +7,7 @@ import {
   isRetryableUpstreamStatus,
   parseRetryAfter,
   RobloxV2RejectedError,
-} from '../src/services/assets/roblox';
+} from '../../src/services/assets/roblox';
 
 describe('Roblox asset delivery helpers', () => {
   test('encodes asset IDs in v1 URLs', () => {

@@ -10,7 +10,7 @@
 
 import { Hono, type MiddlewareHandler } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
-import { type RateLimitBinding, rateLimit, rateLimitPassed } from '../src/http/middleware/rateLimit';
+import { type RateLimitBinding, rateLimit, rateLimitPassed } from '../../src/http/middleware/rateLimit';
 
 // Creates a rate limiter that always allows requests
 function createPassingRateLimiter(): RateLimitBinding {

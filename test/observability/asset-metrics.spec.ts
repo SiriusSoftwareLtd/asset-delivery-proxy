@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { writeAssetMetric } from '../src/observability/assetMetrics';
+import { writeAssetMetric } from '../../src/observability/assetMetrics';
 
 describe('asset metrics', () => {
   test('uses defaults for optional metric fields', () => {
