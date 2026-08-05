@@ -315,7 +315,22 @@ describe('asset resolution coordinator internals', () => {
     }
   });
 
-  test('does not retry when the deadline expires during retry backoff', async () => {
+  test.each([
+    {
+      name: 'a failed upstream request',
+      mockFetch: () => Promise.reject(new Error('upstream connection failed')),
+    },
+    {
+      name: 'a retryable upstream response',
+      mockFetch: () =>
+        Promise.resolve(
+          new Response(null, {
+            status: 503,
+            statusText: 'Service Unavailable',
+          }),
+        ),
+    },
+  ])('does not retry $name when the deadline expires during retry backoff', async ({ mockFetch }) => {
     const assetId = `4${Date.now()}`;
 
     const identity = await buildAssetResolutionIdentity(
@@ -345,15 +360,13 @@ describe('asset resolution coordinator internals', () => {
         }));
 
         const releasePermitMock = vi.fn(() => {
-          // The first upstream attempt failed and the coordinator chose to
-          // retry. Simulate the deadline expiring before backoff completes.
           now = deadline;
         });
 
         coordinator.acquirePermit = acquirePermitMock;
         coordinator.releasePermit = releasePermitMock;
 
-        const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('upstream connection failed'));
+        const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
         try {
           const result = await coordinator.resolveUncoalesced({
@@ -375,8 +388,6 @@ describe('asset resolution coordinator internals', () => {
 
           expect(acquirePermitMock).toHaveBeenCalledTimes(1);
           expect(releasePermitMock).toHaveBeenCalledTimes(1);
-
-          // No second upstream attempt may start after the deadline.
           expect(fetchMock).toHaveBeenCalledTimes(1);
         } finally {
           coordinator.acquirePermit = originalAcquirePermit;
