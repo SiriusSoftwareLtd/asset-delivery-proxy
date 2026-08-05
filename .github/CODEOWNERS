@@ -5,12 +5,18 @@
 /.github/ @MaxTCodes
 /.github/workflows/ @MaxTCodes
 /.github/dependabot.yml @MaxTCodes
+/.github/ISSUE_TEMPLATE/ @MaxTCodes
+/.github/pull_request_template.md @MaxTCodes
 
 # Deployment and Cloudflare configuration
 /wrangler.jsonc @MaxTCodes
 /worker-configuration.d.ts @MaxTCodes
 
 # Dependency and tooling configuration
+/.auto-header.toml @MaxTCodes
+/.editorconfig @MaxTCodes
+/.gitignore @MaxTCodes
+/.node-version @MaxTCodes
 /package.json @MaxTCodes
 /pnpm-lock.yaml @MaxTCodes
 /pnpm-workspace.yaml @MaxTCodes
@@ -19,20 +25,36 @@
 /tsconfig.tools.json @MaxTCodes
 /vitest.config.mts @MaxTCodes
 
+# Worker entry points and composition
+/src/index.ts @MaxTCodes
+/src/worker/ @MaxTCodes
+
+# Asset delivery, caching, and upstream coordination
+/src/assets/ @MaxTCodes
+/src/services/assets/ @MaxTCodes
+
+# Icon delivery, rendering, and provider integration
+/src/icons/ @MaxTCodes
+/src/services/icons/ @MaxTCodes
+
 # Security-sensitive application areas
 /src/durable-objects/ @MaxTCodes
-/src/middleware/ @MaxTCodes
-/src/services/ @MaxTCodes
 /src/observability/ @MaxTCodes
+/src/shared/ @MaxTCodes
 
 # Public API routing and HTTP behavior
-/src/routes/ @MaxTCodes
 /src/http/ @MaxTCodes
+/src/infrastructure/http/ @MaxTCodes
+/src/types/ @MaxTCodes
+
+# Test coverage and fixtures
+/test/ @MaxTCodes
 
 # Production verification tooling
 /scripts/ @MaxTCodes
 
 # Security and contribution policy
+/AGENTS.md @MaxTCodes
 /SECURITY.md @MaxTCodes
 /CODE_OF_CONDUCT.md @MaxTCodes
 /CONTRIBUTING.md @MaxTCodes
