@@ -20,7 +20,7 @@ export default defineWorkersConfig({
         perFile: true,
         lines: 95,
         functions: 90,
-        branches: 80,
+        branches: 90,
         statements: 90,
       },
       include: ['src/**/*.ts'],
