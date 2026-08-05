@@ -7,6 +7,11 @@ import { AssetResolutionPermitDeadlineError } from '../src/durable-objects/asset
 
 type CoordinatorInternals = {
   cooldownUntil: number;
+  retryBaseMs: number;
+
+  inFlight: Map<string, Promise<AssetResolutionResult>>;
+
+  resolve(request: AssetCoordinatorRequest): Promise<AssetResolutionResult>;
   resolveUncoalesced(request: AssetCoordinatorRequest): Promise<AssetResolutionResult>;
 
   acquirePermit(deadline: number): Promise<Permit>;
@@ -149,6 +154,7 @@ describe('asset resolution coordinator internals', () => {
         const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
           const response = new Response(new Uint8Array([1]), {
             status: 429,
+            statusText: 'Rate Limited',
             headers: {
               'Retry-After': '5',
             },
@@ -171,6 +177,7 @@ describe('asset resolution coordinator internals', () => {
             expect.objectContaining({
               kind: 'error',
               status: 429,
+              error: 'Rate Limited',
               retryAfter: 5,
               attempts: 1,
               origin: 'upstream',
@@ -262,7 +269,7 @@ describe('asset resolution coordinator internals', () => {
     }
   });
 
-  test('maps a permit queue deadline error to a coordinator timeout', async () => {
+  test('maps a permit queue deadline during retry admission to an upstream timeout', async () => {
     const assetId = `5${Date.now()}`;
 
     const identity = await buildAssetResolutionIdentity(
@@ -273,17 +280,27 @@ describe('asset resolution coordinator internals', () => {
 
     await env.assetCache.delete(identity.physicalKey);
 
-    const stub = createStub('permit-deadline');
+    const stub = createStub('permit-deadline-after-retry');
 
     try {
       await runInDurableObject(stub, async (instance) => {
         const coordinator = instance as unknown as CoordinatorInternals;
 
+        const originalRetryBaseMs = coordinator.retryBaseMs;
+        coordinator.retryBaseMs = 1;
+
         const acquireMock = vi
           .spyOn(coordinator.permitQueue, 'acquire')
-          .mockRejectedValue(new AssetResolutionPermitDeadlineError());
+          .mockResolvedValueOnce({
+            queueTimeMs: 0,
+          })
+          .mockRejectedValueOnce(new AssetResolutionPermitDeadlineError());
 
-        const fetchMock = vi.spyOn(globalThis, 'fetch');
+        const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+          new Response(null, {
+            status: 503,
+          }),
+        );
 
         try {
           const result = await coordinator.resolveUncoalesced({
@@ -297,15 +314,17 @@ describe('asset resolution coordinator internals', () => {
               kind: 'error',
               status: 504,
               error: 'Roblox asset delivery timed out',
-              attempts: 0,
+              attempts: 1,
               queueTimeMs: 0,
-              origin: 'admission',
+              origin: 'upstream',
             }),
           );
 
-          expect(acquireMock).toHaveBeenCalledTimes(1);
-          expect(fetchMock).not.toHaveBeenCalled();
+          expect(acquireMock).toHaveBeenCalledTimes(2);
+          expect(fetchMock).toHaveBeenCalledTimes(1);
         } finally {
+          coordinator.retryBaseMs = originalRetryBaseMs;
+
           acquireMock.mockRestore();
           fetchMock.mockRestore();
         }
@@ -452,6 +471,70 @@ describe('asset resolution coordinator internals', () => {
       } finally {
         acquireMock.mockRestore();
         nowSpy.mockRestore();
+      }
+    });
+  });
+
+  test('does not remove a replacement in-flight operation when an older operation finishes', async () => {
+    const assetId = `3${Date.now()}`;
+
+    const identity = await buildAssetResolutionIdentity(
+      assetId,
+      new Request(`https://proxy.test/v1/assets/${assetId}`),
+      false,
+    );
+
+    const stub = createStub('in-flight-replacement');
+
+    await runInDurableObject(stub, async (instance) => {
+      const coordinator = instance as unknown as CoordinatorInternals;
+
+      let releaseOperation!: () => void;
+
+      const operationGate = new Promise<void>((resolve) => {
+        releaseOperation = resolve;
+      });
+
+      const result: AssetResolutionResult = {
+        kind: 'error',
+        status: 503,
+        error: 'test result',
+        attempts: 0,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'admission',
+        cacheWrite: 'not-attempted',
+      };
+
+      const resolveMock = vi.spyOn(coordinator, 'resolveUncoalesced').mockImplementation(async () => {
+        await operationGate;
+        return result;
+      });
+
+      try {
+        const operation = coordinator.resolve({
+          identity,
+          deadline: Date.now() + 10_000,
+          backpressure: false,
+        });
+
+        await vi.waitFor(() => {
+          expect(resolveMock).toHaveBeenCalledTimes(1);
+        });
+
+        const replacement = Promise.resolve(result);
+
+        coordinator.inFlight.set(identity.canonicalKey, replacement);
+
+        releaseOperation();
+
+        await operation;
+
+        expect(coordinator.inFlight.get(identity.canonicalKey)).toBe(replacement);
+      } finally {
+        releaseOperation();
+        coordinator.inFlight.delete(identity.canonicalKey);
+        resolveMock.mockRestore();
       }
     });
   });
