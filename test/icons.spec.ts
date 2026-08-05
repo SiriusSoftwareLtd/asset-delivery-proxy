@@ -103,6 +103,7 @@ describe('icon delivery', () => {
     ['/icons/lucide/check?size=0', 'size'],
     ['/icons/remix/check', 'category'],
     ['/icons/rayfield/check?size=64', 'Rayfield icons do not support query options'],
+    ['/icons/font-awesome/circle?style=invalid', 'Invalid Font Awesome style'],
   ])('rejects invalid request %s', async (path, message) => {
     const response = await worker.fetch(request(path), createTestEnv());
 
