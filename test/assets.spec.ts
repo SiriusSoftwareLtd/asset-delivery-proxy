@@ -565,6 +565,89 @@ describe('asset delivery', () => {
     fetchMock.mockRestore();
   });
 
+  test('preserves upstream status text for a direct batch error', async () => {
+    const cache = createCache();
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('unavailable', {
+        status: 503,
+        statusText: 'Service Unavailable',
+      }),
+    );
+
+    try {
+      const response = await worker.fetch(
+        batchRequest({
+          assetIds: ['7202'],
+        }),
+        createTestEnv(false, cache),
+      );
+
+      const body = (await response.json()) as {
+        results: Array<{
+          status: number;
+          error?: string;
+        }>;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.results).toEqual([
+        expect.objectContaining({
+          status: 503,
+          error: 'Service Unavailable',
+        }),
+      ]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(cache.values.size).toBe(0);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('reports a coordinator fresh KV recheck as a standard hit when layered caching is disabled', async () => {
+    const timestamp = Date.now();
+    const metricWrites: AnalyticsPoint[] = [];
+
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+        assetMetrics: {
+          writeDataPoint: (point) => metricWrites.push(point),
+        },
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'asset',
+        status: 200,
+        data: new Uint8Array([8, 9]),
+        contentType: 'image/png',
+        extension: '.png',
+        timestamp,
+        attempts: 0,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'kv',
+      }),
+    } as unknown as CloudflareBindings;
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    try {
+      const response = await worker.fetch(request('7250'), testEnv);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('hit');
+      expect(response.headers.get('X-Cache-Hit')).toBe('true');
+
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      expect(metricWrites).toHaveLength(1);
+      expect(metricWrites[0]?.blobs?.[1]).toBe('fresh-hit');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   test('reports a coordinator fresh KV recheck as a cache hit metric', async () => {
     const timestamp = Date.now();
     const metricWrites: AnalyticsPoint[] = [];
@@ -754,6 +837,44 @@ describe('asset delivery', () => {
     }
   });
 
+  test('reports joined coordinator resolutions without an upstream status', async () => {
+    const metricWrites: AnalyticsPoint[] = [];
+
+    const testEnv = {
+      ...createTestEnv(false, createCache(), {
+        enabledFlags: ['asset-upstream-coordinator'],
+        assetMetrics: {
+          writeDataPoint: (point) => metricWrites.push(point),
+        },
+      }),
+      ASSET_RESOLUTION_COORDINATOR: fakeCoordinator({
+        kind: 'asset',
+        status: 200,
+        data: new Uint8Array([31, 32]),
+        contentType: 'image/png',
+        extension: '.png',
+        timestamp: Date.now(),
+        attempts: 1,
+        queueTimeMs: 4,
+        joined: true,
+        origin: 'upstream',
+        cacheWrite: 'written',
+      }),
+    } as unknown as CloudflareBindings;
+
+    const response = await worker.fetch(request('7804'), testEnv);
+
+    expect(response.status).toBe(200);
+
+    expect(metricWrites).toHaveLength(1);
+
+    const metric = metricWrites[0];
+
+    expect(metric?.blobs?.[0]).toBe('coordinator-joined');
+    expect(metric?.blobs?.[3]).toBe('none');
+    expect(metric?.doubles?.[3]).toBe(1);
+  });
+
   test('serves stale KV bytes without client limiting and refreshes in the background', async () => {
     const assetRequest = request('7301');
     const identity = await buildAssetResolutionIdentity('7301', assetRequest, false);
@@ -784,6 +905,37 @@ describe('asset delivery', () => {
       expect(
         new Uint8Array((await env.assetCache.get(identity.physicalKey, 'arrayBuffer')) ?? new ArrayBuffer(0)),
       ).toEqual(new Uint8Array([4]));
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('does not serve stale KV bytes when layered caching is disabled', async () => {
+    const assetRequest = request('7307');
+    const identity = await buildAssetResolutionIdentity('7307', assetRequest, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    await seedStaleAsset(env.assetCache, identity, new Uint8Array([1]));
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(new Uint8Array([2]), {
+        headers: {
+          'Content-Type': 'image/png',
+        },
+      }),
+    );
+
+    try {
+      const response = await worker.fetch(assetRequest, createTestEnv(false, env.assetCache));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('miss');
+
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([2]));
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       fetchMock.mockRestore();
       await env.assetCache.delete(identity.physicalKey);
@@ -960,6 +1112,67 @@ describe('asset delivery', () => {
       expect(new Uint8Array(await retry.arrayBuffer())).toEqual(new Uint8Array([10]));
       await waitOnExecutionContext(retryContext);
       expect(coordinatorResolve).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('keeps stale coordinator negative-cache write failures non-blocking and observable', async () => {
+    const assetRequest = request('7306');
+    const identity = await buildAssetResolutionIdentity('7306', assetRequest, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+    await seedStaleAsset(env.assetCache, identity, new Uint8Array([10]));
+
+    const coordinatorResolve = vi.fn(
+      async (): Promise<AssetResolutionResult> => ({
+        kind: 'not-found',
+        status: 404,
+        error: 'Asset not found',
+        timestamp: Date.now(),
+        upstreamStatus: 404,
+        attempts: 1,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'upstream',
+        cacheWrite: 'failed',
+      }),
+    );
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const testEnv = {
+      ...createTestEnv(false, env.assetCache, {
+        enabledFlags: ['asset-cache-layered', 'asset-upstream-coordinator'],
+      }),
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+      ASSET_RESOLUTION_COORDINATOR: {
+        getByName: () => ({
+          resolve: coordinatorResolve,
+        }),
+      } as unknown as CloudflareBindings['ASSET_RESOLUTION_COORDINATOR'],
+    } as unknown as CloudflareBindings;
+
+    try {
+      const context = createExecutionContext();
+
+      const response = await sourceWorker.fetch(new IncomingRequest(assetRequest.clone()), testEnv, context);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Cache-Status')).toBe('stale-hit');
+
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([10]));
+
+      await waitOnExecutionContext(context);
+
+      expect(coordinatorResolve).toHaveBeenCalledTimes(1);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'asset.cache.stale_refresh_negative_write_failed',
+        }),
+      );
     } finally {
       warn.mockRestore();
       await env.assetCache.delete(identity.physicalKey);

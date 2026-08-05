@@ -255,9 +255,14 @@ function resolutionToDelivery(
 }
 
 function metricCacheOutcome(cacheStatus: CacheStatus): string {
-  if (cacheStatus === 'hit' || cacheStatus === 'kv-fresh-hit' || cacheStatus === 'l1-hit') return 'fresh-hit';
-  if (cacheStatus === 'negative-hit') return 'negative-hit';
-  if (cacheStatus === 'stale-hit') return 'stale-hit';
+  if (cacheStatus === 'hit' || cacheStatus === 'kv-fresh-hit' || cacheStatus === 'l1-hit') {
+    return 'fresh-hit';
+  }
+
+  if (cacheStatus === 'negative-hit') {
+    return 'negative-hit';
+  }
+
   return 'miss';
 }
 
@@ -461,16 +466,18 @@ export async function fetchAsset(
         backpressureEnabled,
       );
       if (delivery.kind === 'asset' && layeredCacheEnabled) {
+        const timestamp = delivery.timestamp;
+
         const entry: AssetCacheEntry = {
           data: delivery.data,
           state: 'fresh',
           metadata: {
             kind: 'asset',
             version: 2,
-            timestamp: delivery.timestamp,
-            storedAt: delivery.timestamp,
-            freshUntil: delivery.timestamp + 24 * 60 * 60 * 1_000,
-            staleUntil: delivery.timestamp + 7 * 24 * 60 * 60 * 1_000,
+            timestamp,
+            storedAt: timestamp,
+            freshUntil: timestamp + 24 * 60 * 60 * 1_000,
+            staleUntil: timestamp + 7 * 24 * 60 * 60 * 1_000,
             contentType: delivery.contentType,
             extension: delivery.extension,
           },
