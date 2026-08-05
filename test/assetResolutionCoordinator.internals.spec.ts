@@ -314,4 +314,80 @@ describe('asset resolution coordinator internals', () => {
       await env.assetCache.delete(identity.physicalKey);
     }
   });
+
+  test('does not retry when the deadline expires during retry backoff', async () => {
+    const assetId = `4${Date.now()}`;
+
+    const identity = await buildAssetResolutionIdentity(
+      assetId,
+      new Request(`https://proxy.test/v1/assets/${assetId}`),
+      false,
+    );
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = createStub('retry-backoff-deadline');
+
+    try {
+      await runInDurableObject(stub, async (instance) => {
+        const coordinator = instance as unknown as CoordinatorInternals;
+
+        let now = 1_000;
+        const deadline = 2_000;
+
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+        const originalAcquirePermit = coordinator.acquirePermit.bind(coordinator);
+        const originalReleasePermit = coordinator.releasePermit.bind(coordinator);
+
+        const acquirePermitMock = vi.fn(async () => ({
+          queueTimeMs: 0,
+        }));
+
+        const releasePermitMock = vi.fn(() => {
+          // The first upstream attempt failed and the coordinator chose to
+          // retry. Simulate the deadline expiring before backoff completes.
+          now = deadline;
+        });
+
+        coordinator.acquirePermit = acquirePermitMock;
+        coordinator.releasePermit = releasePermitMock;
+
+        const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('upstream connection failed'));
+
+        try {
+          const result = await coordinator.resolveUncoalesced({
+            identity,
+            deadline,
+            backpressure: true,
+          });
+
+          expect(result).toEqual(
+            expect.objectContaining({
+              kind: 'error',
+              status: 504,
+              error: 'Roblox asset delivery timed out',
+              attempts: 1,
+              queueTimeMs: 0,
+              origin: 'upstream',
+            }),
+          );
+
+          expect(acquirePermitMock).toHaveBeenCalledTimes(1);
+          expect(releasePermitMock).toHaveBeenCalledTimes(1);
+
+          // No second upstream attempt may start after the deadline.
+          expect(fetchMock).toHaveBeenCalledTimes(1);
+        } finally {
+          coordinator.acquirePermit = originalAcquirePermit;
+          coordinator.releasePermit = originalReleasePermit;
+
+          fetchMock.mockRestore();
+          nowSpy.mockRestore();
+        }
+      });
+    } finally {
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
 });
