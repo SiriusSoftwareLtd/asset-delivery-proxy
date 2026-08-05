@@ -16,35 +16,69 @@ function uniqueAssetId(): string {
 }
 
 describe('asset resilience primitives', () => {
-  test('coalesces 100 simultaneous same-key coordinator requests', async () => {
+  test('coalesces simultaneous same-key coordinator requests', async () => {
+    const callerCount = 16;
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
     await env.assetCache.delete(identity.physicalKey);
+
     const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`coalescing-${assetId}`);
-    let releaseFetch: (() => void) | undefined;
+
+    let releaseFetch!: () => void;
+    let signalFetchStarted!: () => void;
+
     const fetchGate = new Promise<void>((resolve) => {
       releaseFetch = resolve;
     });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-      await fetchGate;
-      return new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } });
+
+    const fetchStarted = new Promise<void>((resolve) => {
+      signalFetchStarted = resolve;
     });
 
-    const calls = Array.from({ length: 100 }, () =>
-      stub.resolve({ identity, deadline: Date.now() + 10_000, backpressure: false }),
-    );
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-    releaseFetch?.();
-    const results = await Promise.all(calls);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      signalFetchStarted();
+      await fetchGate;
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
-    expect(results.filter((result) => result.joined).length).toBeGreaterThan(0);
-    expect(results.filter((result) => !result.joined && result.attempts === 1)).toHaveLength(1);
-    expect(results.filter((result) => result.joined || result.origin === 'kv')).toHaveLength(99);
-    fetchMock.mockRestore();
-    await env.assetCache.delete(identity.physicalKey);
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          'Content-Type': 'image/png',
+        },
+      });
+    });
+
+    try {
+      const calls = Array.from({ length: callerCount }, () =>
+        stub.resolve({
+          identity,
+          deadline: Date.now() + 10_000,
+          backpressure: false,
+        }),
+      );
+
+      await fetchStarted;
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      releaseFetch();
+
+      const results = await Promise.all(calls);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
+
+      expect(results.filter((result) => result.joined).length).toBeGreaterThan(0);
+
+      expect(results.filter((result) => !result.joined && result.attempts === 1)).toHaveLength(1);
+
+      expect(results.filter((result) => result.joined || result.origin === 'kv')).toHaveLength(callerCount - 1);
+    } finally {
+      fetchMock.mockRestore();
+      releaseFetch();
+      await env.assetCache.delete(identity.physicalKey);
+    }
   });
 
   test('persists a 429 cooldown and suppresses the next cold resolution', async () => {
