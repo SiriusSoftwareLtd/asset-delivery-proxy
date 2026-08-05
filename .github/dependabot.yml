@@ -11,9 +11,8 @@ updates:
     open-pull-requests-limit: 10
     versioning-strategy: "increase-if-necessary"
     commit-message:
-      prefix: "chore"
-      prefix-development: "chore"
-      include: "scope"
+      prefix: "chore(deps): ⬆️ "
+      prefix-development: "chore(deps-dev): ⬆️ "
     groups:
       production-dependencies:
         dependency-type: "production"
@@ -29,8 +28,7 @@ updates:
       timezone: "America/Detroit"
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "ci"
-      include: "scope"
+      prefix: "ci(deps): ⬆️ "
     groups:
       github-actions:
         patterns:
