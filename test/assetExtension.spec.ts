@@ -104,6 +104,61 @@ describe('asset extension detection', () => {
     expect(cancel).toHaveBeenCalledWith('consumer stopped');
   });
 
+  test('handles cancellation while an upstream body read is pending', async () => {
+    let pullCount = 0;
+    let releasePendingPull: (() => void) | undefined;
+    let cancelled = false;
+
+    const cancel = vi.fn(async () => {
+      cancelled = true;
+      releasePendingPull?.();
+    });
+
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        pullCount += 1;
+
+        if (pullCount === 1) {
+          controller.enqueue(new Uint8Array(512).fill(1));
+          return;
+        }
+
+        await new Promise<void>((resolve) => {
+          releasePendingPull = resolve;
+        });
+
+        if (!cancelled) {
+          controller.enqueue(bytes(2, 3, 4));
+        }
+      },
+      cancel,
+    });
+
+    const restored = await readPrefixAndRestoreBody(stream);
+
+    if (!restored.body) {
+      throw new Error('Expected restored body');
+    }
+
+    const reader = restored.body.getReader();
+
+    const first = await reader.read();
+
+    expect(first.done).toBe(false);
+    expect(first.value).toEqual(new Uint8Array(512).fill(1));
+
+    const pendingRead = reader.read();
+
+    await vi.waitFor(() => {
+      expect(pullCount).toBe(2);
+    });
+
+    await reader.cancel('consumer stopped');
+    await pendingRead;
+
+    expect(cancel).toHaveBeenCalledWith('consumer stopped');
+  });
+
   test('detects additional supported font signatures', () => {
     expect(extensionFromPrefix(createEot())).toBe('.eot');
     expect(extensionFromPrefix(bytes(0x00, 0x01, 0x00, 0x00))).toBe('.ttf');
