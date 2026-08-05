@@ -22,7 +22,7 @@ import {
 
 const COOLDOWN_KEY = 'cooldownUntil';
 
-type Permit = { queueTimeMs: number };
+export type Permit = { queueTimeMs: number };
 
 class QueueFullError extends Error {}
 class CooldownError extends Error {

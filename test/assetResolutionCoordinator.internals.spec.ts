@@ -2,11 +2,8 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
 import { buildAssetResolutionIdentity } from '../src/assets/cache';
 import type { AssetCoordinatorRequest, AssetResolutionResult } from '../src/assets/types';
+import type { Permit } from '../src/durable-objects/assetResolutionCoordinator';
 import { AssetResolutionPermitDeadlineError } from '../src/durable-objects/assetResolutionPermitQueue';
-
-type Permit = {
-  queueTimeMs: number;
-};
 
 type CoordinatorInternals = {
   resolveUncoalesced(request: AssetCoordinatorRequest): Promise<AssetResolutionResult>;
@@ -157,8 +154,7 @@ describe('asset resolution coordinator internals', () => {
             },
           });
 
-          // Locking the body makes response.body.cancel() reject. The
-          // coordinator should ignore that cleanup failure.
+          // Locking the body causes response.body.cancel() to reject.
           reader = response.body?.getReader();
 
           return response;
@@ -217,7 +213,7 @@ describe('asset resolution coordinator internals', () => {
 
         const acquirePermitMock = vi.fn(async () => {
           // Admission succeeds, but the deadline expires before the
-          // coordinator begins the upstream fetch.
+          // coordinator starts the upstream request.
           nowSpy.mockReturnValue(deadline);
 
           return {
