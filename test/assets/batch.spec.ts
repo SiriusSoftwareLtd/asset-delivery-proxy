@@ -12,6 +12,7 @@ describe('asset batch results', () => {
       extension: undefined,
       cacheStatus: 'miss',
       cacheHit: false,
+      timestamp: 1_000,
     });
 
     expect(result).toEqual({
