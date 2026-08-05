@@ -9,6 +9,8 @@ export default defineWorkersConfig({
           bindings: {
             ROBLOX_API_KEY: '',
             ENVIRONMENT: 'test',
+            ASSET_COORDINATOR_PERMIT_INTERVAL_MS: '5',
+            ASSET_COORDINATOR_RETRY_BASE_MS: '2',
           },
         },
       },
