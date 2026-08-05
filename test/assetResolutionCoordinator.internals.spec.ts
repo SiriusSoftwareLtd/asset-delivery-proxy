@@ -435,4 +435,24 @@ describe('asset resolution coordinator internals', () => {
       }
     });
   });
+
+  test('rejects permit acquisition when the deadline has already expired', async () => {
+    const stub = createStub('expired-permit-deadline');
+
+    await runInDurableObject(stub, async (instance) => {
+      const coordinator = instance as unknown as CoordinatorInternals;
+
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+      const acquireMock = vi.spyOn(coordinator.permitQueue, 'acquire');
+
+      try {
+        await expect(coordinator.acquirePermit(1_000)).rejects.toThrow('Asset resolution deadline reached');
+
+        expect(acquireMock).not.toHaveBeenCalled();
+      } finally {
+        acquireMock.mockRestore();
+        nowSpy.mockRestore();
+      }
+    });
+  });
 });
