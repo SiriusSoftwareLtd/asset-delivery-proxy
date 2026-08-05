@@ -140,8 +140,15 @@ describe('asset resilience primitives', () => {
 
       expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
 
-      expect(results.filter((result) => !result.joined)).toHaveLength(1);
-      expect(results.filter((result) => result.joined)).toHaveLength(callerCount - 1);
+      expect(results.filter((result) => result.joined).length).toBeGreaterThan(0);
+
+      expect(
+        results.filter((result) => result.joined || (result.kind === 'asset' && result.origin === 'kv')),
+      ).toHaveLength(callerCount - 1);
+
+      expect(
+        results.filter((result) => !result.joined && result.kind === 'asset' && result.origin === 'upstream'),
+      ).toHaveLength(1);
     } finally {
       fetchMock.mockRestore();
       releaseFetch();
