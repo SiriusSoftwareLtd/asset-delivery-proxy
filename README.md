@@ -6,7 +6,7 @@ The service validates asset requests, proxies Roblox asset delivery, applies lay
 
 ## Features
 
-- Proxies Roblox asset delivery through authenticated and controlled request paths.
+- Proxies Roblox assets through controlled request paths.
 - Supports single and batch asset requests.
 - Serves icons from Lucide, Feather, Remix Icon, Font Awesome, Heroicons, and Rayfield.
 - Renders supported SVG icon sources to PNG with `resvg`.
@@ -18,31 +18,11 @@ The service validates asset requests, proxies Roblox asset delivery, applies lay
 - Emits structured logs, request IDs, cache metadata, metrics, and tracing data.
 - Supports controlled feature rollout through Cloudflare Flagship.
 
-## API overview
-
-| Method | Endpoint                     | Purpose                                  |
-| ------ | ---------------------------- | ---------------------------------------- |
-| `GET`  | `/assets/:assetId`           | Fetch a single Roblox asset.             |
-| `POST` | `/assets/batch`              | Fetch an ordered batch of Roblox assets. |
-| `GET`  | `/icons/:iconPack/:iconName` | Fetch a single icon as PNG.              |
-| `POST` | `/icon/batch`                | Fetch an ordered batch of icons.         |
-| `GET`  | `/health`                    | Check Worker health.                     |
-
-Asset delivery requests require:
-
-```http
-X-Rayfield-Secure-Mode: true
-```
-
-The complete public API contract, request formats, response schemas, supported icon options, status codes, and examples are maintained in the Sirius documentation repository:
-
-https://github.com/SiriusSoftwareLtd/docs
-
 ## Requirements
 
 - Node.js 20 or later
 - pnpm
-- A Cloudflare account for Worker development or deployment
+- A Cloudflare account for local remote bindings or deployment
 
 ## Getting started
 
@@ -64,17 +44,51 @@ Start Wrangler development mode with local observability enabled:
 pnpm dev
 ```
 
-The Worker uses the bindings declared in `wrangler.jsonc`. Use resources from your own Cloudflare account when testing a fork or separate deployment.
+The Worker uses the bindings declared in [`wrangler.jsonc`](./wrangler.jsonc).
+
+Use resources from your own Cloudflare account when testing a fork or separate deployment. Do not commit credentials, private asset data, or production resource configuration.
+
+## API
+
+The Worker exposes endpoints for single and batch Roblox asset delivery, icon rendering, and health checks.
+
+| Method | Endpoint                     | Description                              |
+| ------ | ---------------------------- | ---------------------------------------- |
+| `GET`  | `/health`                    | Check Worker health.                     |
+| `GET`  | `/assets/:assetId`           | Fetch a single Roblox asset.             |
+| `POST` | `/assets/batch`              | Fetch an ordered batch of Roblox assets. |
+| `GET`  | `/icons/:iconPack/:iconName` | Fetch a single icon as PNG.              |
+| `POST` | `/icon/batch`                | Fetch an ordered batch of icons.         |
+
+Asset delivery requests require secure mode:
+
+```http
+X-Rayfield-Secure-Mode: true
+```
+
+See [`docs/api.md`](./docs/api.md) for the complete API contract, including:
+
+- Request formats.
+- Validation rules.
+- Batch limits and semantics.
+- Supported icon providers and options.
+- Response headers.
+- Error responses and status codes.
+- Asset and icon caching behavior.
+- Upstream safeguards.
 
 ## Configuration
 
 Worker configuration lives in [`wrangler.jsonc`](./wrangler.jsonc).
 
-Repository-local operational documentation covers settings that must stay synchronized with the deployed Worker:
+Repository-local operational documentation covers configuration that must stay synchronized with the deployed Worker:
 
 - [`docs/runtime-configuration.md`](./docs/runtime-configuration.md) — bindings, variables, secrets, and runtime configuration.
 - [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) — asset resilience and rollout flags.
 - [`docs/cd-secrets.md`](./docs/cd-secrets.md) — production deployment credentials and GitHub environment requirements.
+- [`docs/api.md`](./docs/api.md) — public HTTP API behavior.
+
+### Secrets
 
 Do not commit API keys, Cloudflare tokens, production credentials, or private verification fixtures.
 
@@ -84,6 +98,8 @@ Store the Roblox Open Cloud API key as a Wrangler secret:
 pnpm exec wrangler secret put ROBLOX_API_KEY
 ```
 
+### Cloudflare binding types
+
 Regenerate Cloudflare binding types after changing `wrangler.jsonc`:
 
 ```sh
@@ -91,6 +107,32 @@ pnpm cf-typegen
 ```
 
 Commit the resulting `worker-configuration.d.ts` update with the configuration change.
+
+## Asset resilience
+
+Asset delivery uses layered caching and optional upstream coordination.
+
+The current resilience system includes:
+
+- Cloudflare Cache API as a data-center-local L1 cache.
+- Workers KV as the persistent asset cache.
+- Fresh positive asset entries for 24 hours.
+- Stale delivery with background refresh.
+- Five-minute negative caching for supported `404` responses.
+- Durable Object request coalescing.
+- Optional upstream admission control and backpressure.
+- Per-client rate limiting.
+- Feature-flagged rollout of resilience paths.
+
+Resilience behavior is controlled through:
+
+- `asset-cache-layered`
+- `asset-cache-hit-exempt-limit`
+- `asset-upstream-coordinator`
+- `asset-upstream-backpressure`
+- `use-asset-delivery-v2`
+
+See [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) for the complete rollout model, dependencies, and fallback behavior.
 
 ## Deployment
 
@@ -100,11 +142,13 @@ Deploy the configured Worker with:
 pnpm deploy
 ```
 
-The repository's CD workflow deploys from the `production` GitHub Actions environment after CI succeeds for a push to `main`.
+The CD workflow deploys from the `production` GitHub Actions environment after CI succeeds for a push to `main`.
 
-Before deployment, the workflow verifies that the tested commit is still the current `main` head. It performs the check again immediately before deployment so an older CI run cannot overwrite a newer revision.
+Before deployment, the workflow verifies that the tested commit is still the current `main` head. It performs the check again immediately before deployment so an older completed CI run cannot overwrite a newer revision.
 
 To prevent CD for a specific commit, place `[skip cd]` at the start or end of its commit message.
+
+See [`docs/cd-secrets.md`](./docs/cd-secrets.md) for the required GitHub environment configuration and Cloudflare permissions.
 
 ## Production verification
 
@@ -116,7 +160,11 @@ Create a local fixture file:
 cp scripts/verify-production.assets.example.json scripts/verify-production.assets.json
 ```
 
-Populate it with suitable private Roblox asset fixtures, then run:
+Populate it with between 1 and 25 private Roblox asset fixtures.
+
+Include at least one stable image asset and one stable font asset when possible so extension detection, byte comparison, cache behavior, and batch delivery are exercised across supported asset kinds.
+
+Run the verifier with:
 
 ```sh
 ASSET_PROXY_URL=https://<worker-hostname> \
@@ -124,18 +172,32 @@ ROBLOX_API_KEY=<roblox-open-cloud-key> \
 pnpm verify:production
 ```
 
-The fixture file is ignored by Git and must not contain credentials.
+The verifier also loads `.env` automatically, so local operator settings can be stored there.
 
-The verifier checks core production behavior including:
+Do not commit:
 
-- Worker health.
-- Secure-mode enforcement.
-- Roblox asset delivery.
-- Cache behavior.
-- Ordered batch delivery.
-- Duplicate asset handling.
+- Real API keys.
+- Private asset IDs.
+- `scripts/verify-production.assets.json`.
+- Generated verification output.
 
-See the repository-local operational documentation for configuration details.
+`pnpm verify:production` checks:
+
+- `/health`.
+- Secure-mode rejection.
+- Single asset delivery against Roblox Open Cloud.
+- Cache-hit behavior.
+- Ordered `/assets/batch` delivery.
+- Duplicate batch consistency.
+
+`ASSET_PROXY_URL` must use HTTPS unless `ASSET_PROXY_ALLOW_HTTP=true` is explicitly set for non-production testing.
+
+Optional verifier settings include:
+
+- `ASSET_PROXY_TEST_ASSETS_FILE`
+- `ASSET_PROXY_TIMEOUT_MS`
+- `ASSET_PROXY_CACHE_ATTEMPTS`
+- `ASSET_PROXY_CACHE_DELAY_MS`
 
 ## Development commands
 
@@ -164,17 +226,39 @@ pnpm lint
 pnpm coverage
 ```
 
-Coverage is enforced per source file to prevent new code from bypassing the configured thresholds.
+CI runs type checking, Biome checks, and the coverage suite for pull requests and pushes to `main`.
 
-Tests cover asset delivery, caching, Durable Object coordination, rate limiting, observability, Roblox upstream behavior, icon generation, validation, and failure handling.
+Coverage is enforced per source file.
+
+The test suite covers areas including:
+
+- Asset request validation.
+- Roblox upstream discovery and delivery.
+- Layered caching.
+- Cache corruption and failure handling.
+- Asset extension detection.
+- Durable Object coordination.
+- Admission control and backpressure.
+- Rate limiting.
+- Structured observability.
+- Icon provider validation.
+- SVG rendering.
+- Rayfield icon delivery.
+- Batch processing.
+- Upstream timeout and response-size handling.
 
 ## Documentation
 
-Public Rayfield documentation and API reference material are maintained in:
+Repository documentation is split by responsibility:
 
-https://github.com/SiriusSoftwareLtd/docs
+| Document                                                           | Purpose                                                                              |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [`docs/api.md`](./docs/api.md)                                     | HTTP requests, responses, validation, providers, status codes, and caching behavior. |
+| [`docs/runtime-configuration.md`](./docs/runtime-configuration.md) | Cloudflare bindings, variables, secrets, and runtime settings.                       |
+| [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md)     | Asset resilience feature flags and rollout behavior.                                 |
+| [`docs/cd-secrets.md`](./docs/cd-secrets.md)                       | Production deployment credentials and GitHub environment configuration.              |
 
-Keep documentation in this repository only when it describes implementation-specific configuration, deployment, rollout, or operational behavior that must change with the Worker source.
+Broader Rayfield documentation belongs in the Sirius documentation repository.
 
 ## Contributing
 
@@ -186,7 +270,7 @@ Keep pull requests focused, include tests for behavior changes, and do not commi
 
 ## Security
 
-Do not report suspected vulnerabilities through public issues or pull requests.
+Do not report suspected vulnerabilities through public issues, discussions, or pull requests.
 
 Read [`SECURITY.md`](./SECURITY.md) and use GitHub Private Vulnerability Reporting.
 
