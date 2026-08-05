@@ -1,255 +1,316 @@
-import { env, runInDurableObject } from 'cloudflare:test';
-import { describe, expect, test, vi } from 'vitest';
-import { buildAssetResolutionIdentity } from '../src/assets/cache';
-import type { AssetCoordinatorRequest, AssetResolutionResult } from '../src/assets/types';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  AssetResolutionPermitDeadlineError,
+  AssetResolutionPermitQueue,
+  AssetResolutionQueueFullError,
+} from '../src/durable-objects/assetResolutionPermitQueue';
 
-type Permit = {
-  queueTimeMs: number;
-};
+describe('AssetResolutionPermitQueue', () => {
+  it('grants a permit and dispatches the next queued caller after release', async () => {
+    const queue = new AssetResolutionPermitQueue(1, 1, 0);
 
-type CoordinatorInternals = {
-  resolveUncoalesced(request: AssetCoordinatorRequest): Promise<AssetResolutionResult>;
+    const first = await queue.acquire(Date.now() + 1_000);
+    const second = queue.acquire(Date.now() + 1_000);
 
-  acquirePermit(deadline: number): Promise<Permit>;
+    expect(first.queueTimeMs).toBeGreaterThanOrEqual(0);
+    expect(queue.activeCount).toBe(1);
+    expect(queue.queuedCount).toBe(1);
 
-  releasePermit(): void;
-};
+    queue.release();
 
-function createStub(label: string) {
-  return env.ASSET_RESOLUTION_COORDINATOR.getByName(`${label}-${crypto.randomUUID()}`);
-}
-
-describe('asset resolution coordinator internals', () => {
-  test('reports a failed coordinator asset KV write without failing resolution', async () => {
-    const assetId = `9${Date.now()}`;
-
-    const identity = await buildAssetResolutionIdentity(
-      assetId,
-      new Request(`https://proxy.test/v1/assets/${assetId}`),
-      false,
-    );
-
-    // Workers KV rejects an empty key. readKv() treats the
-    // initial read as a recoverable miss, while writeAssetToKv()
-    // fails and exercises the coordinator's cacheWrite fallback.
-    const invalidIdentity = {
-      ...identity,
-      physicalKey: '',
-    };
-
-    const stub = createStub('asset-write-failure');
-
-    await runInDurableObject(stub, async (instance) => {
-      const coordinator = instance as unknown as CoordinatorInternals;
-
-      const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
-        async () =>
-          new Response(new Uint8Array([1, 2, 3]), {
-            headers: {
-              'Content-Type': 'image/png',
-            },
-          }),
-      );
-
-      try {
-        const result = await coordinator.resolveUncoalesced({
-          identity: invalidIdentity,
-          deadline: Date.now() + 10_000,
-          backpressure: false,
-        });
-
-        expect(result).toEqual(
-          expect.objectContaining({
-            kind: 'asset',
-            status: 200,
-            origin: 'upstream',
-            cacheWrite: 'failed',
-          }),
-        );
-      } finally {
-        fetchMock.mockRestore();
-      }
+    await expect(second).resolves.toMatchObject({
+      queueTimeMs: expect.any(Number),
     });
+
+    expect(queue.activeCount).toBe(1);
+    expect(queue.queuedCount).toBe(0);
+
+    queue.release();
+
+    expect(queue.activeCount).toBe(0);
   });
 
-  test('ignores a response-body cancellation failure on upstream 429', async () => {
-    const assetId = `8${Date.now()}`;
+  it('rejects a caller when the queue is full', async () => {
+    const queue = new AssetResolutionPermitQueue(1, 0, 0);
 
-    const identity = await buildAssetResolutionIdentity(
-      assetId,
-      new Request(`https://proxy.test/v1/assets/${assetId}`),
-      false,
-    );
+    await queue.acquire(Date.now() + 1_000);
 
-    await env.assetCache.delete(identity.physicalKey);
+    await expect(queue.acquire(Date.now() + 1_000)).rejects.toBeInstanceOf(AssetResolutionQueueFullError);
 
-    const stub = createStub('cancel-failure');
+    queue.release();
+  });
+
+  it('rejects a deadline that has already been reached', async () => {
+    const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+    await expect(queue.acquire(Date.now())).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+    expect(queue.activeCount).toBe(0);
+    expect(queue.queuedCount).toBe(0);
+  });
+
+  it('expires a queued caller when its deadline is reached', async () => {
+    vi.useFakeTimers();
 
     try {
-      await runInDurableObject(stub, async (instance) => {
-        const coordinator = instance as unknown as CoordinatorInternals;
+      vi.setSystemTime(new Date(1_000));
 
-        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      const queue = new AssetResolutionPermitQueue(1, 1, 0);
 
-        const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-          const response = new Response(new Uint8Array([1]), {
-            status: 429,
-            headers: {
-              'Retry-After': '5',
-            },
-          });
+      await queue.acquire(2_000);
 
-          reader = response.body?.getReader();
+      const queued = queue.acquire(1_100);
 
-          return response;
-        });
+      expect(queue.queuedCount).toBe(1);
 
-        try {
-          const result = await coordinator.resolveUncoalesced({
-            identity,
-            deadline: Date.now() + 10_000,
-            backpressure: false,
-          });
+      await vi.advanceTimersByTimeAsync(100);
 
-          expect(result).toEqual(
-            expect.objectContaining({
-              kind: 'error',
-              status: 429,
-              retryAfter: 5,
-              attempts: 1,
-              origin: 'upstream',
-            }),
-          );
-        } finally {
-          reader?.releaseLock();
-          fetchMock.mockRestore();
-        }
-      });
+      await expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      expect(queue.queuedCount).toBe(0);
+
+      queue.release();
+
+      expect(queue.activeCount).toBe(0);
     } finally {
-      await env.assetCache.delete(identity.physicalKey);
+      vi.useRealTimers();
     }
   });
 
-  test('returns a timeout when the deadline expires immediately after permit admission', async () => {
-    const assetId = `7${Date.now()}`;
-
-    const identity = await buildAssetResolutionIdentity(
-      assetId,
-      new Request(`https://proxy.test/v1/assets/${assetId}`),
-      false,
-    );
-
-    await env.assetCache.delete(identity.physicalKey);
-
-    const stub = createStub('deadline-after-permit');
+  it('expires queued work during dispatch when its deadline has passed', async () => {
+    vi.useFakeTimers();
 
     try {
-      await runInDurableObject(stub, async (instance) => {
-        const coordinator = instance as unknown as CoordinatorInternals;
+      vi.setSystemTime(new Date(1_000));
 
-        const deadline = 10_000;
-        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+      const queue = new AssetResolutionPermitQueue(1, 1, 0);
 
-        const originalAcquirePermit = coordinator.acquirePermit.bind(coordinator);
-        const originalReleasePermit = coordinator.releasePermit.bind(coordinator);
+      await queue.acquire(2_000);
 
-        const acquirePermitMock = vi.fn(async () => {
-          // Admission succeeds, but the request expires before
-          // the upstream fetch begins.
-          nowSpy.mockReturnValue(deadline);
+      const queued = queue.acquire(1_100);
 
-          return {
-            queueTimeMs: 17,
-          };
-        });
+      // Advance Date.now() without running the queued waiter's timeout.
+      vi.setSystemTime(new Date(1_200));
 
-        const releasePermitMock = vi.fn();
+      queue.release();
 
-        coordinator.acquirePermit = acquirePermitMock;
-        coordinator.releasePermit = releasePermitMock;
+      await expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
 
-        const fetchMock = vi.spyOn(globalThis, 'fetch');
-
-        try {
-          const result = await coordinator.resolveUncoalesced({
-            identity,
-            deadline,
-            backpressure: true,
-          });
-
-          expect(result).toEqual(
-            expect.objectContaining({
-              kind: 'error',
-              status: 504,
-              error: 'Roblox asset delivery timed out',
-              attempts: 0,
-              queueTimeMs: 17,
-              origin: 'admission',
-            }),
-          );
-
-          expect(acquirePermitMock).toHaveBeenCalledTimes(1);
-          expect(releasePermitMock).toHaveBeenCalledTimes(1);
-          expect(fetchMock).not.toHaveBeenCalled();
-        } finally {
-          coordinator.acquirePermit = originalAcquirePermit;
-          coordinator.releasePermit = originalReleasePermit;
-          fetchMock.mockRestore();
-          nowSpy.mockRestore();
-        }
-      });
+      expect(queue.queuedCount).toBe(0);
+      expect(queue.activeCount).toBe(0);
     } finally {
-      await env.assetCache.delete(identity.physicalKey);
+      vi.useRealTimers();
     }
   });
 
-  test('reports a failed negative-cache KV write without failing resolution', async () => {
-    const assetId = `6${Date.now()}`;
+  it('preserves a queued caller whose deadline has not expired', async () => {
+    vi.useFakeTimers();
 
-    const identity = await buildAssetResolutionIdentity(
-      assetId,
-      new Request(`https://proxy.test/v1/assets/${assetId}`),
-      false,
-    );
+    try {
+      vi.setSystemTime(new Date(1_000));
 
-    // As in the asset-write failure test, the empty physical key makes
-    // the KV write fail while the initial cache read remains recoverable.
-    const invalidIdentity = {
-      ...identity,
-      physicalKey: '',
-    };
+      const queue = new AssetResolutionPermitQueue(1, 1, 0);
 
-    const stub = createStub('not-found-write-failure');
+      await queue.acquire(5_000);
 
-    await runInDurableObject(stub, async (instance) => {
-      const coordinator = instance as unknown as CoordinatorInternals;
+      const queued = queue.acquire(4_000);
 
-      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-        new Response(null, {
-          status: 404,
-          statusText: 'Not Found',
-        }),
-      );
+      expect(queue.queuedCount).toBe(1);
 
-      try {
-        const result = await coordinator.resolveUncoalesced({
-          identity: invalidIdentity,
-          deadline: Date.now() + 10_000,
-          backpressure: false,
-        });
+      // acquire() performs an expiration sweep. The existing waiter is still
+      // valid, so it must remain queued and make the queue full.
+      await expect(queue.acquire(3_000)).rejects.toBeInstanceOf(AssetResolutionQueueFullError);
 
-        expect(result).toEqual(
-          expect.objectContaining({
-            kind: 'not-found',
-            status: 404,
-            upstreamStatus: 404,
-            origin: 'upstream',
-            cacheWrite: 'failed',
-          }),
-        );
-      } finally {
-        fetchMock.mockRestore();
-      }
-    });
+      expect(queue.queuedCount).toBe(1);
+
+      queue.release();
+
+      await expect(queued).resolves.toMatchObject({
+        queueTimeMs: expect.any(Number),
+      });
+
+      expect(queue.queuedCount).toBe(0);
+
+      queue.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects all queued callers when requested', async () => {
+    const queue = new AssetResolutionPermitQueue(1, 2, 0);
+
+    await queue.acquire(Date.now() + 1_000);
+
+    const firstQueued = queue.acquire(Date.now() + 1_000);
+    const secondQueued = queue.acquire(Date.now() + 1_000);
+
+    expect(queue.queuedCount).toBe(2);
+
+    const error = new Error('cooldown');
+
+    queue.rejectQueued(error);
+
+    await expect(firstQueued).rejects.toBe(error);
+    await expect(secondQueued).rejects.toBe(error);
+
+    expect(queue.queuedCount).toBe(0);
+    expect(queue.activeCount).toBe(1);
+
+    queue.release();
+
+    expect(queue.activeCount).toBe(0);
+  });
+
+  it('does not allow the active permit count to become negative', () => {
+    const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+    expect(queue.activeCount).toBe(0);
+
+    queue.release();
+    queue.release();
+
+    expect(queue.activeCount).toBe(0);
+  });
+
+  it('waits for the scheduled permit interval before granting another permit', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 50);
+
+      await queue.acquire(2_000);
+      queue.release();
+
+      const second = queue.acquire(2_000);
+
+      let settled = false;
+      void second.finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(49);
+
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(second).resolves.toMatchObject({
+        queueTimeMs: 50,
+      });
+
+      queue.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores persisted permit timing', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const values = new Map<string, number>([['nextPermitAt', 1_100]]);
+
+      const storage = {
+        get: async (key: string) => values.get(key),
+        put: async (key: string, value: number) => {
+          values.set(key, value);
+        },
+      } as unknown as DurableObjectStorage;
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 50, storage);
+
+      await queue.restore();
+
+      const permit = queue.acquire(2_000);
+
+      let settled = false;
+      void permit.finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(99);
+
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(permit).resolves.toMatchObject({
+        queueTimeMs: 100,
+      });
+
+      expect(values.get('nextPermitAt')).toBe(1_150);
+
+      queue.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects when restored permit timing cannot meet the deadline', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const storage = {
+        get: async () => 2_000,
+        put: async () => {},
+      } as unknown as DurableObjectStorage;
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 0, storage);
+
+      await queue.restore();
+
+      await expect(queue.acquire(1_500)).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      expect(queue.activeCount).toBe(0);
+      expect(queue.queuedCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases a permit when persisted timing cannot be written', async () => {
+    const storage = {
+      get: async () => 0,
+      put: async () => {
+        throw new Error('storage unavailable');
+      },
+    } as unknown as DurableObjectStorage;
+
+    const queue = new AssetResolutionPermitQueue(1, 0, 0, storage);
+
+    await expect(queue.acquire(Date.now() + 1_000)).rejects.toThrow('storage unavailable');
+
+    expect(queue.activeCount).toBe(0);
+  });
+
+  it('releases a permit when its deadline expires while persisting permit timing', async () => {
+    let now = 1_000;
+
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const storage = {
+      get: async () => 0,
+      put: async () => {
+        // Simulate storage taking long enough for the deadline to expire.
+        now = 1_200;
+      },
+    } as unknown as DurableObjectStorage;
+
+    const queue = new AssetResolutionPermitQueue(1, 0, 0, storage);
+
+    try {
+      await expect(queue.acquire(1_100)).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      expect(queue.activeCount).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
