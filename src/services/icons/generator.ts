@@ -6,9 +6,10 @@
 
 import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
-import { enterTraceSpan, parseReportLevel } from '../../middleware/observability';
-import { getErrorMessage, isTimeoutError } from '../../utils/errors';
-import { fetchWithTimeout } from '../../utils/fetch';
+import { fetchWithTimeout } from '../../infrastructure/http/fetchWithTimeout';
+import { parseReportLevel } from '../../observability/reportLevel';
+import { enterTraceSpan } from '../../observability/tracing';
+import { getErrorMessage, isTimeoutError } from '../../shared/errors';
 import { readBoundedBody } from './body';
 import { MAX_SVG_BYTES, SVG_PREFIX_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 import { IconError } from './errors';
@@ -152,7 +153,7 @@ async function getSvgIconContent(iconConfig: SvgIconConfig, reportLevel: string)
   );
 }
 
-function createRenderConfig(outputSize: number, providedConfig: ResvgRenderOptions = {}): ResvgRenderOptions {
+function createRenderConfig(outputSize: number, providedConfig: ResvgRenderOptions): ResvgRenderOptions {
   const providedFont = providedConfig.font;
 
   /*
@@ -160,12 +161,12 @@ function createRenderConfig(outputSize: number, providedConfig: ResvgRenderOptio
    * Explicit font buffers are retained when the caller provides them.
    */
   const font =
-    providedFont && 'fontBuffers' in providedFont
-      ? providedFont
-      : {
-          ...(providedFont ?? {}),
+    providedFont === undefined || !('fontBuffers' in providedFont)
+      ? {
+          ...providedFont,
           loadSystemFonts: false,
-        };
+        }
+      : providedFont;
 
   return {
     ...providedConfig,
@@ -213,7 +214,10 @@ function renderPng(svgContent: Uint8Array, renderConfig: ResvgRenderOptions, rep
             const png = new Uint8Array(rendered.asPng());
 
             if (png.byteLength === 0) {
-              throw new Error('Renderer returned an empty PNG');
+              throw new IconError('EMPTY_PNG', 'Renderer returned an empty PNG', {
+                stage: 'render',
+                retryable: false,
+              });
             }
 
             span.setAttribute('png.bytes', png.byteLength);

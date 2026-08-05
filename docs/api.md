@@ -4,20 +4,20 @@ This document describes the HTTP API exposed by the Asset Delivery Proxy, includ
 
 ## Endpoints
 
-| Method | Endpoint                     | Description                              |
-| ------ | ---------------------------- | ---------------------------------------- |
-| `GET`  | `/health`                    | Check Worker health.                     |
-| `GET`  | `/assets/:assetId`           | Fetch a single Roblox asset.             |
-| `POST` | `/assets/batch`              | Fetch an ordered batch of Roblox assets. |
-| `GET`  | `/icons/:iconPack/:iconName` | Fetch a single icon as PNG.              |
-| `POST` | `/icon/batch`                | Fetch an ordered batch of icons.         |
+| Method | Endpoint                        | Description                              |
+| ------ | ------------------------------- | ---------------------------------------- |
+| `GET`  | `/health`                       | Check Worker health.                     |
+| `GET`  | `/v1/assets/:assetId`           | Fetch a single Roblox asset.             |
+| `POST` | `/v1/assets/batch`              | Fetch an ordered batch of Roblox assets. |
+| `GET`  | `/v1/icons/:iconPack/:iconName` | Fetch a single icon as PNG.              |
+| `POST` | `/v1/icons/batch`               | Fetch an ordered batch of icons.         |
 
 ## Asset delivery
 
 ### Fetch an asset
 
 ```http
-GET /assets/:assetId
+GET /v1/assets/:assetId
 X-Rayfield-Secure-Mode: true
 ```
 
@@ -54,7 +54,7 @@ When lazy miss limiting is enabled, fresh, stale, and negative-cache hits do not
 ## Batch asset delivery
 
 ```http
-POST /assets/batch
+POST /v1/assets/batch
 X-Rayfield-Secure-Mode: true
 Content-Type: application/json
 ```
@@ -115,7 +115,7 @@ A batch makes at most one client rate-limit decision after its cache lookups.
 ### Fetch an icon
 
 ```http
-GET /icons/:iconPack/:iconName
+GET /v1/icons/:iconPack/:iconName
 ```
 
 Supported icon packs are:
@@ -161,11 +161,11 @@ It:
 Examples:
 
 ```http
-GET /icons/lucide/circle-check
-GET /icons/lucide/circle-check?size=128
-GET /icons/remix/home?category=Buildings
-GET /icons/font-awesome/circle?style=brands
-GET /icons/hero/academic-cap?sourceSize=20&style=solid&size=128
+GET /v1/icons/lucide/circle-check
+GET /v1/icons/lucide/circle-check?size=128
+GET /v1/icons/remix/home?category=Buildings
+GET /v1/icons/font-awesome/circle?style=brands
+GET /v1/icons/hero/academic-cap?sourceSize=20&style=solid&size=128
 ```
 
 ## Remix Icon options
@@ -197,7 +197,7 @@ Supported categories are:
 Example:
 
 ```http
-GET /icons/remix/home?category=Buildings
+GET /v1/icons/remix/home?category=Buildings
 ```
 
 ## Font Awesome options
@@ -217,7 +217,7 @@ solid
 Example:
 
 ```http
-GET /icons/font-awesome/circle?style=brands
+GET /v1/icons/font-awesome/circle?style=brands
 ```
 
 ## Heroicons options
@@ -256,7 +256,7 @@ Source-size restrictions:
 Example:
 
 ```http
-GET /icons/hero/academic-cap?sourceSize=20&style=solid&size=128
+GET /v1/icons/hero/academic-cap?sourceSize=20&style=solid&size=128
 ```
 
 ## Rayfield icons
@@ -268,9 +268,9 @@ They bypass SVG fetching and `resvg` rendering.
 Examples:
 
 ```http
-GET /icons/rayfield/check
-GET /icons/rayfield/settings
-GET /icons/rayfield/rayfield
+GET /v1/icons/rayfield/check
+GET /v1/icons/rayfield/settings
+GET /v1/icons/rayfield/rayfield
 ```
 
 Supported Rayfield icon names are:
@@ -293,7 +293,7 @@ Rayfield icons do not accept query options.
 For example:
 
 ```http
-GET /icons/rayfield/check?size=64
+GET /v1/icons/rayfield/check?size=64
 ```
 
 returns `400`.
@@ -377,7 +377,7 @@ Errors use a JSON body containing:
 ## Batch icon delivery
 
 ```http
-POST /icon/batch
+POST /v1/icons/batch
 Content-Type: application/json
 ```
 

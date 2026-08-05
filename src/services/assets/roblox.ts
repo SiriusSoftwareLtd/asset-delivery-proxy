@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { isTimeoutError } from '../../utils/errors';
-import { fetchWithTimeout } from '../../utils/fetch';
+import { fetchWithTimeout } from '../../infrastructure/http/fetchWithTimeout';
+import { isTimeoutError } from '../../shared/errors';
 
 const ROBLOX_ASSET_DELIVERY_ORIGIN = 'https://assetdelivery.roblox.com';
 const ROBLOX_OPEN_CLOUD_ASSET_DELIVERY_ORIGIN = 'https://apis.roblox.com';

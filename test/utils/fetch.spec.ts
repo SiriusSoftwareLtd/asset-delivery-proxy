@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { fetchWithTimeout } from '../../src/utils/fetch';
+import { fetchWithTimeout } from '../../src/infrastructure/http/fetchWithTimeout';
 
 describe('fetchWithTimeout', () => {
   beforeEach(() => {

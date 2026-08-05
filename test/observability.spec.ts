@@ -6,7 +6,14 @@
 
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import { enterTraceSpan, getErrorFields, parseReportLevel, shouldReport } from '../src/middleware/observability';
+import { getErrorFields } from '../src/observability/logging';
+import { parseReportLevel, shouldReport } from '../src/observability/reportLevel';
+import {
+  enterTraceSpan,
+  enterTraceSpanWithRuntime,
+  type TraceRuntime,
+  type TraceSpan,
+} from '../src/observability/tracing';
 import worker from './worker';
 
 function createEnv(reportLevel?: string): CloudflareBindings {
@@ -30,13 +37,54 @@ function createEnv(reportLevel?: string): CloudflareBindings {
 }
 
 function request(assetId: string, headers: Record<string, string> = {}) {
-  return new Request(`https://proxy.test/assets/${assetId}`, { headers });
+  return new Request(`https://proxy.test/v1/assets/${assetId}`, { headers });
 }
 
 describe('observability report levels', () => {
+  test('enters a trace span when reporting is enabled', () => {
+    expect(
+      enterTraceSpan(
+        'test',
+        (span) => {
+          span.setAttribute('test', true);
+          return 'ok';
+        },
+        'info',
+      ),
+    ).toBe('ok');
+  });
+
+  test('uses the runtime trace span when enterSpan is available', () => {
+    const setAttribute = vi.fn();
+
+    const runtime: TraceRuntime = {
+      enterSpan<T>(_name: string, callback: (span: TraceSpan) => T | Promise<T>): T | Promise<T> {
+        return callback({ setAttribute });
+      },
+    };
+
+    const enterSpanSpy = vi.spyOn(runtime, 'enterSpan');
+
+    const result = enterTraceSpanWithRuntime(
+      runtime,
+      'test.operation',
+      (span) => {
+        span.setAttribute('asset.id', '123');
+        return 'completed';
+      },
+      'info',
+    );
+
+    expect(result).toBe('completed');
+    expect(enterSpanSpy).toHaveBeenCalledTimes(1);
+    expect(setAttribute).toHaveBeenCalledWith('asset.id', '123');
+  });
+
   test.each([
     [undefined, 'off'],
     [' invalid ', 'off'],
+    ['constructor', 'off'],
+    ['__proto__', 'off'],
     [' WARN ', 'warn'],
   ])('parses %j as %s', (value, expected) => {
     expect(parseReportLevel(value)).toBe(expected);

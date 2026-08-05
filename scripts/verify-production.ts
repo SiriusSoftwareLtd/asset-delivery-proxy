@@ -384,7 +384,7 @@ async function fetchRobloxAsset(fixture: AssetFixture): Promise<RobloxAsset> {
 }
 
 async function fetchProxyAsset(fixture: AssetFixture): Promise<ProxyAsset> {
-  const response = await fetchWithTimeout(`${baseUrl}/assets/${fixture.id}`, {
+  const response = await fetchWithTimeout(`${baseUrl}/v1/assets/${fixture.id}`, {
     headers: {
       'X-Rayfield-Secure-Mode': 'true',
     },
@@ -446,7 +446,7 @@ async function verifyHealth(): Promise<string> {
 async function verifySecureMode(): Promise<string> {
   const fixture = ASSETS[0];
 
-  const response = await fetchWithTimeout(`${baseUrl}/assets/${fixture.id}`);
+  const response = await fetchWithTimeout(`${baseUrl}/v1/assets/${fixture.id}`);
 
   await assertStatus(response, 403, 'Secure-mode enforcement');
 
@@ -595,7 +595,7 @@ async function verifyBatch(): Promise<string> {
     })),
   );
 
-  const response = await fetchWithTimeout(`${baseUrl}/assets/batch`, {
+  const response = await fetchWithTimeout(`${baseUrl}/v1/assets/batch`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -673,7 +673,7 @@ async function verifyBatch(): Promise<string> {
 async function verifyDuplicateBatch(): Promise<string> {
   const fixture = ASSETS[0];
 
-  const response = await fetchWithTimeout(`${baseUrl}/assets/batch`, {
+  const response = await fetchWithTimeout(`${baseUrl}/v1/assets/batch`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

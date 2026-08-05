@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
+import type { AssetResolutionIdentity, AssetResolutionResult } from '../src/assets/types';
 import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
 import { coordinatorShard, resolveThroughCoordinator } from '../src/services/assets/coordinator-client';
-import type { AssetResolutionIdentity, AssetResolutionResult } from '../src/types/app';
 
 type CoordinatorRequest = {
   identity: AssetResolutionIdentity;
@@ -43,7 +43,7 @@ function createCoordinatorEnv(options: { shards?: string; deadlineMs?: string; b
 }
 
 async function createIdentity(): Promise<AssetResolutionIdentity> {
-  return buildAssetResolutionIdentity('123456', new Request('https://proxy.test/assets/123456'), false);
+  return buildAssetResolutionIdentity('123456', new Request('https://proxy.test/v1/assets/123456'), false);
 }
 
 describe('asset coordinator client', () => {

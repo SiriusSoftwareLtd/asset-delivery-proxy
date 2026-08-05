@@ -7,18 +7,19 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { AppEnvironment } from '../http/context';
+import { observeRequests } from '../http/middleware/observeRequests';
+import { rateLimit } from '../http/middleware/rateLimit';
 import { errorResponse } from '../http/responses';
-import { getErrorFields, logEvent, observeRequests } from '../middleware/observability';
-import { rateLimit } from '../middleware/rateLimiter';
-import { registerRoutes } from '../routes';
-import type { AppEnvironment } from '../types/app';
+import { registerRoutes } from '../http/routes/registerRoutes';
+import { getErrorFields, logEvent } from '../observability/logging';
 
 export const app = new Hono<AppEnvironment>();
 
 app.use('*', observeRequests);
 
 app.use('*', async (c, next) => {
-  const isAssetRoute = c.req.path.startsWith('/assets/');
+  const isAssetRoute = c.req.path.startsWith('/v1/assets/');
   if (isAssetRoute) {
     try {
       if (await c.env.FLAGS.getBooleanValue('asset-cache-hit-exempt-limit', false)) {
@@ -49,7 +50,7 @@ app.get('/health', (c) => c.text('OK', 200));
 
 app.all('/', (c) => c.redirect('https://docs.sirius.menu/rayfield-gen2', 302));
 
-registerRoutes(app);
+app.route('/', registerRoutes());
 
 /**
  * Logs uncaught errors once and returns a consistent public response.

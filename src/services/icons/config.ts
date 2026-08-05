@@ -61,7 +61,13 @@ function asOutputSize(value: string): number {
 }
 
 function asOneOf<const T extends readonly string[]>(value: string, allowed: T, label: string): T[number] {
-  if (!allowed.includes(value)) throw new Error(`Invalid ${label}`);
+  if (!allowed.includes(value)) {
+    throw new IconError('INVALID_CONFIG', `Invalid ${label}`, {
+      stage: 'validation',
+      retryable: false,
+    });
+  }
+
   return value as T[number];
 }
 

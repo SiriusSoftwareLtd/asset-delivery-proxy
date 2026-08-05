@@ -86,7 +86,7 @@ describe('worker', () => {
 
     try {
       const response = await worker.fetch(
-        request('/assets/123', {
+        request('/v1/assets/123', {
           headers: {
             'X-Rayfield-Secure-Mode': 'true',
           },
@@ -109,7 +109,7 @@ describe('worker', () => {
         expect.objectContaining({
           event: 'request.failed',
           method: 'GET',
-          path: '/assets/123',
+          path: '/v1/assets/123',
           status: 429,
         }),
       );

@@ -70,7 +70,7 @@ body:
     attributes:
       label: Affected endpoint
       description: Provide the affected HTTP endpoint if applicable.
-      placeholder: GET /assets/:assetId
+      placeholder: GET /v1/assets/:assetId
     validations:
       required: false
 

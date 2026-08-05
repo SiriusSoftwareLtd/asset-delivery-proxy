@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { isTimeoutError } from '../../utils/errors';
-import { fetchWithTimeout } from '../../utils/fetch';
+import { fetchWithTimeout } from '../../infrastructure/http/fetchWithTimeout';
+import { isTimeoutError } from '../../shared/errors';
 import { readBoundedBody } from './body';
 import { MAX_PNG_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 import { IconError } from './errors';
@@ -28,12 +28,16 @@ const RAYFIELD_ICON_IDS = {
 
 export type RayfieldIconName = keyof typeof RAYFIELD_ICON_IDS;
 
+function isRayfieldIconName(iconName: string): iconName is keyof typeof RAYFIELD_ICON_IDS {
+  return Object.hasOwn(RAYFIELD_ICON_IDS, iconName);
+}
+
 export function resolveRayfieldIconId(iconName: string): string | undefined {
-  if (!Object.hasOwn(RAYFIELD_ICON_IDS, iconName)) {
+  if (!isRayfieldIconName(iconName)) {
     return undefined;
   }
 
-  return RAYFIELD_ICON_IDS[iconName as RayfieldIconName];
+  return RAYFIELD_ICON_IDS[iconName];
 }
 
 function getRayfieldIconUrlFromId(assetId: string): string {

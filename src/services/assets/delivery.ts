@@ -5,10 +5,13 @@
  */
 
 import { HTTPException } from 'hono/http-exception';
-import { enterTraceSpan, getErrorFields, logEvent } from '../../middleware/observability';
-import { limitAssetMiss } from '../../middleware/rateLimiter';
+import { limitAssetMiss } from '../../assets/rateLimit';
+import type { AssetResolutionIdentity, AssetResolutionResult, CacheStatus } from '../../assets/types';
+import type { AppContext } from '../../http/context';
+import { cancelResponseBody } from '../../infrastructure/http/cancelResponseBody';
 import { writeAssetMetric } from '../../observability/assetMetrics';
-import type { AppContext, AssetResolutionIdentity, AssetResolutionResult, CacheStatus } from '../../types/app';
+import { getErrorFields, logEvent } from '../../observability/logging';
+import { enterTraceSpan } from '../../observability/tracing';
 import {
   type AssetCacheEntry,
   buildAssetResolutionIdentity,
@@ -37,9 +40,8 @@ export type AssetDeliveryResult =
       extension?: string;
       cacheStatus: CacheStatus;
       cacheHit: boolean;
-      timestamp?: number;
+      timestamp: number;
       upstreamStatus?: number;
-      retryAfter?: number;
     }
   | {
       assetId: string;
@@ -101,7 +103,7 @@ function cachedAssetResult(assetId: string, entry: AssetCacheEntry, cacheStatus:
   };
 }
 
-async function resolveDirect(
+export async function resolveDirect(
   c: AppContext,
   identity: AssetResolutionIdentity,
 ): Promise<{ result: AssetResolutionResult; cacheStatus: CacheStatus }> {
@@ -134,7 +136,7 @@ async function resolveDirect(
     if (!response.ok) {
       if (response.status === 404) {
         const timestamp = Date.now();
-        await response.body?.cancel().catch(() => undefined);
+        await cancelResponseBody(response);
         let cacheStatus: CacheStatus = 'negative-write';
         try {
           await writeNotFoundToKv(c.env.assetCache, identity, timestamp);
@@ -253,9 +255,14 @@ function resolutionToDelivery(
 }
 
 function metricCacheOutcome(cacheStatus: CacheStatus): string {
-  if (cacheStatus === 'hit' || cacheStatus === 'kv-fresh-hit' || cacheStatus === 'l1-hit') return 'fresh-hit';
-  if (cacheStatus === 'negative-hit') return 'negative-hit';
-  if (cacheStatus === 'stale-hit') return 'stale-hit';
+  if (cacheStatus === 'hit' || cacheStatus === 'kv-fresh-hit' || cacheStatus === 'l1-hit') {
+    return 'fresh-hit';
+  }
+
+  if (cacheStatus === 'negative-hit') {
+    return 'negative-hit';
+  }
+
   return 'miss';
 }
 
@@ -350,9 +357,7 @@ function scheduleStaleRefresh(
   );
   staleRefreshes.set(identity.canonicalKey, refresh);
   refresh.finally(() => {
-    if (staleRefreshes.get(identity.canonicalKey) === refresh) {
-      staleRefreshes.delete(identity.canonicalKey);
-    }
+    staleRefreshes.delete(identity.canonicalKey);
   });
   return refresh;
 }
@@ -459,16 +464,18 @@ export async function fetchAsset(
         backpressureEnabled,
       );
       if (delivery.kind === 'asset' && layeredCacheEnabled) {
+        const timestamp = delivery.timestamp;
+
         const entry: AssetCacheEntry = {
           data: delivery.data,
           state: 'fresh',
           metadata: {
             kind: 'asset',
             version: 2,
-            timestamp: delivery.timestamp ?? Date.now(),
-            storedAt: delivery.timestamp ?? Date.now(),
-            freshUntil: (delivery.timestamp ?? Date.now()) + 24 * 60 * 60 * 1_000,
-            staleUntil: (delivery.timestamp ?? Date.now()) + 7 * 24 * 60 * 60 * 1_000,
+            timestamp,
+            storedAt: timestamp,
+            freshUntil: timestamp + 24 * 60 * 60 * 1_000,
+            staleUntil: timestamp + 7 * 24 * 60 * 60 * 1_000,
             contentType: delivery.contentType,
             extension: delivery.extension,
           },

@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { getErrorFields, logEvent } from '../../middleware/observability';
-import type { AssetResolutionIdentity, CachedAssetMetadata, CurrentCachedAssetMetadata } from '../../types/app';
+import type { AssetResolutionIdentity, CachedAssetMetadata, CurrentCachedAssetMetadata } from '../../assets/types';
+import { getErrorFields, logEvent } from '../../observability/logging';
 import { buildRobloxV1Url, buildRobloxV2Request } from './roblox';
 
 export const ASSET_FRESH_TTL_MS = 24 * 60 * 60 * 1_000;

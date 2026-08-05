@@ -5,28 +5,27 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { readKv, writeAssetToKv, writeNotFoundToKv } from '../services/assets/cache';
-import { resolveAssetExtension } from '../services/assets/extension';
-import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../services/assets/roblox';
 import type {
   AssetCacheWriteOutcome,
   AssetCoordinatorRequest,
   AssetResolutionOrigin,
   AssetResolutionResult,
-} from '../types/app';
+} from '../assets/types';
+import { cancelResponseBody } from '../infrastructure/http/cancelResponseBody';
+import { readKv, writeAssetToKv, writeNotFoundToKv } from '../services/assets/cache';
+import { resolveAssetExtension } from '../services/assets/extension';
+import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../services/assets/roblox';
+import { readInteger } from '../shared/config';
+import { jitter, sleepWithinDeadline } from '../shared/timing';
+import {
+  AssetResolutionPermitDeadlineError,
+  AssetResolutionPermitQueue,
+  AssetResolutionQueueFullError,
+} from './assetResolutionPermitQueue';
 
 const COOLDOWN_KEY = 'cooldownUntil';
-const NEXT_PERMIT_KEY = 'nextPermitAt';
 
-type Permit = { queueTimeMs: number };
-type PermitWaiter = {
-  enqueuedAt: number;
-  deadline: number;
-  resolve: (permit: Permit) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-  settled: boolean;
-};
+export type Permit = { queueTimeMs: number };
 
 class QueueFullError extends Error {}
 class CooldownError extends Error {
@@ -36,58 +35,30 @@ class CooldownError extends Error {
 }
 class PermitDeadlineError extends Error {}
 
-function readInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function sleepWithinDeadline(milliseconds: number, deadline: number): Promise<boolean> {
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) return false;
-  await sleep(Math.min(milliseconds, remainingMs));
-  return Date.now() < deadline;
-}
-
-function jitter(milliseconds: number): number {
-  const random = crypto.getRandomValues(new Uint8Array(1))[0] ?? 0;
-  return Math.floor(milliseconds * (0.5 + random / 255));
-}
-
 function originForAttempts(attempts: number): AssetResolutionOrigin {
   return attempts === 0 ? 'admission' : 'upstream';
 }
 
 export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings> {
   private readonly inFlight = new Map<string, Promise<AssetResolutionResult>>();
-  private readonly queue: PermitWaiter[] = [];
-  private readonly concurrency: number;
-  private readonly queueLimit: number;
   private readonly permitIntervalMs: number;
   private readonly fallbackCooldownSeconds: number;
   private readonly retryBaseMs: number;
-  private active = 0;
+  private readonly permitQueue: AssetResolutionPermitQueue;
   private cooldownUntil = 0;
-  private nextPermitAt = 0;
 
   constructor(ctx: DurableObjectState, env: CloudflareBindings) {
     super(ctx, env);
-    this.concurrency = readInteger(env.ASSET_COORDINATOR_CONCURRENCY, 1, 1, 32);
-    this.queueLimit = readInteger(env.ASSET_COORDINATOR_QUEUE_LIMIT, 32, 0, 1_000);
+    const concurrency = readInteger(env.ASSET_COORDINATOR_CONCURRENCY, 1, 1, 32);
+    const queueLimit = readInteger(env.ASSET_COORDINATOR_QUEUE_LIMIT, 32, 0, 1_000);
     this.permitIntervalMs = readInteger(env.ASSET_COORDINATOR_PERMIT_INTERVAL_MS, 1_000, 0, 60_000);
     this.fallbackCooldownSeconds = readInteger(env.ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS, 30, 1, 3_600);
     this.retryBaseMs = readInteger(env.ASSET_COORDINATOR_RETRY_BASE_MS, 250, 1, 10_000);
+    this.permitQueue = new AssetResolutionPermitQueue(concurrency, queueLimit, this.permitIntervalMs, ctx.storage);
 
     ctx.blockConcurrencyWhile(async () => {
-      const [cooldownUntil, nextPermitAt] = await Promise.all([
-        this.ctx.storage.get<number>(COOLDOWN_KEY),
-        this.ctx.storage.get<number>(NEXT_PERMIT_KEY),
-      ]);
-      this.cooldownUntil = cooldownUntil ?? 0;
-      this.nextPermitAt = nextPermitAt ?? 0;
+      this.cooldownUntil = (await this.ctx.storage.get<number>(COOLDOWN_KEY)) ?? 0;
+      await this.permitQueue.restore();
     });
   }
 
@@ -241,7 +212,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           if (!response.ok) {
             if (upstreamStatus === 404) {
               const timestamp = Date.now();
-              await response.body?.cancel().catch(() => undefined);
+              await cancelResponseBody(response);
               let cacheWrite: AssetCacheWriteOutcome = 'written';
               try {
                 await writeNotFoundToKv(this.env.assetCache, request.identity, timestamp);
@@ -265,7 +236,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             if (upstreamStatus === 429) {
               const retryAfter = parseRetryAfter(response.headers.get('Retry-After')) ?? this.fallbackCooldownSeconds;
               if (request.backpressure) await this.enterCooldown(retryAfter);
-              await response.body?.cancel().catch(() => undefined);
+              await cancelResponseBody(response);
               return this.errorResult(
                 429,
                 response.statusText || 'Too Many Requests',
@@ -283,7 +254,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
               attempt === 1 &&
               Date.now() < request.deadline
             ) {
-              await response.body?.cancel().catch(() => undefined);
+              await cancelResponseBody(response);
               this.releasePermit();
               permitHeld = false;
               if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
@@ -356,7 +327,9 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
       }
     }
 
-    return this.errorResult(502, 'Unable to reach Roblox asset delivery', 2, queueTimeMs, 'upstream');
+    // impossible to reach here
+    /* istanbul ignore next -- @preserve */
+    return Promise.reject(new Error('Unexpected error'));
   }
 
   private errorResult(
@@ -382,113 +355,53 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     };
   }
 
-  private acquirePermit(deadline: number): Promise<Permit> {
+  private async acquirePermit(deadline: number): Promise<Permit> {
     const now = Date.now();
-    if (now >= deadline) return Promise.reject(new PermitDeadlineError('Asset resolution deadline reached'));
-    this.expireQueuedWaiters(now);
+
+    if (now >= deadline) {
+      throw new PermitDeadlineError('Asset resolution deadline reached');
+    }
+
     if (this.cooldownUntil > now) {
-      return Promise.reject(new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000))));
+      throw new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000)));
     }
-    if (this.active < this.concurrency) {
-      return this.grantPermit(now, deadline);
-    }
-    if (this.queue.length >= this.queueLimit) return Promise.reject(new QueueFullError('Queue full'));
 
-    return new Promise((resolve, reject) => {
-      const waiter: PermitWaiter = {
-        enqueuedAt: now,
-        deadline,
-        resolve,
-        reject,
-        timeout: setTimeout(() => this.expireWaiter(waiter), Math.max(0, deadline - now)),
-        settled: false,
-      };
-      this.queue.push(waiter);
-    });
-  }
+    let permit: Permit;
 
-  private async grantPermit(enqueuedAt: number, deadline: number): Promise<Permit> {
-    const scheduledAt = Math.max(Date.now(), this.nextPermitAt);
-    if (scheduledAt >= deadline) throw new PermitDeadlineError('Asset resolution deadline reached');
-    this.active += 1;
-    let permitReleased = false;
-    this.nextPermitAt = scheduledAt + this.permitIntervalMs;
     try {
-      await this.ctx.storage.put(NEXT_PERMIT_KEY, this.nextPermitAt);
-      if (scheduledAt > Date.now()) await sleep(scheduledAt - Date.now());
-
-      const now = Date.now();
-      if (now >= deadline) {
-        permitReleased = true;
-        this.releasePermit();
-        throw new PermitDeadlineError('Asset resolution deadline reached');
-      }
-      if (this.cooldownUntil > now) {
-        permitReleased = true;
-        this.releasePermit();
-        throw new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000)));
-      }
-      return { queueTimeMs: Math.max(0, now - enqueuedAt) };
+      permit = await this.permitQueue.acquire(deadline);
     } catch (error) {
-      if (!permitReleased) this.releasePermit();
+      if (error instanceof AssetResolutionPermitDeadlineError) {
+        throw new PermitDeadlineError(error.message);
+      }
+
+      if (error instanceof AssetResolutionQueueFullError) {
+        throw new QueueFullError(error.message);
+      }
+
       throw error;
     }
+
+    // A different request may have received a 429 while this permit
+    // was waiting for its scheduled grant time.
+    const grantedAt = Date.now();
+
+    if (this.cooldownUntil > grantedAt) {
+      this.releasePermit();
+
+      throw new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - grantedAt) / 1_000)));
+    }
+
+    return permit;
   }
 
   private releasePermit(): void {
-    this.active = Math.max(0, this.active - 1);
-    this.dispatchQueuedPermit();
+    this.permitQueue.release();
   }
 
   private async enterCooldown(retryAfter: number): Promise<void> {
     this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + retryAfter * 1_000);
     await this.ctx.storage.put(COOLDOWN_KEY, this.cooldownUntil);
-    const error = new CooldownError(retryAfter);
-    for (const waiter of this.queue.splice(0)) {
-      if (this.settleWaiter(waiter)) waiter.reject(error);
-    }
-  }
-
-  private dispatchQueuedPermit(): void {
-    this.expireQueuedWaiters();
-    if (this.active >= this.concurrency) return;
-
-    const waiter = this.queue.shift();
-    if (!waiter) return;
-    if (!this.settleWaiter(waiter)) {
-      this.dispatchQueuedPermit();
-      return;
-    }
-
-    void this.grantPermit(waiter.enqueuedAt, waiter.deadline).then(waiter.resolve, (error) => {
-      waiter.reject(error);
-      if (error instanceof PermitDeadlineError) this.dispatchQueuedPermit();
-    });
-  }
-
-  private expireQueuedWaiters(now = Date.now()): void {
-    for (let index = 0; index < this.queue.length; ) {
-      const waiter = this.queue[index];
-      if (!waiter || waiter.deadline > now) {
-        index += 1;
-        continue;
-      }
-
-      this.queue.splice(index, 1);
-      if (this.settleWaiter(waiter)) waiter.reject(new PermitDeadlineError('Asset resolution deadline reached'));
-    }
-  }
-
-  private expireWaiter(waiter: PermitWaiter): void {
-    const index = this.queue.indexOf(waiter);
-    if (index !== -1) this.queue.splice(index, 1);
-    if (this.settleWaiter(waiter)) waiter.reject(new PermitDeadlineError('Asset resolution deadline reached'));
-  }
-
-  private settleWaiter(waiter: PermitWaiter): boolean {
-    if (waiter.settled) return false;
-    waiter.settled = true;
-    clearTimeout(waiter.timeout);
-    return true;
+    this.permitQueue.rejectQueued(new CooldownError(retryAfter));
   }
 }

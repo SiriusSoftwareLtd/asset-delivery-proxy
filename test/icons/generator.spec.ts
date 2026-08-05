@@ -1,3 +1,4 @@
+import { Resvg } from '@resvg/resvg-wasm';
 import { describe, expect, test, vi } from 'vitest';
 import { MAX_SVG_BYTES } from '../../src/services/icons/constants';
 import { IconError } from '../../src/services/icons/errors';
@@ -84,6 +85,46 @@ describe('icon generator', () => {
       fetchMock.mockRestore();
     }
   });
+
+  test('reports an empty rendered PNG as an empty PNG error', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(svg, {
+        headers: { 'Content-Type': 'image/svg+xml' },
+      }),
+    );
+
+    const renderMock = vi.spyOn(Resvg.prototype, 'render').mockReturnValue({
+      asPng: () => new Uint8Array(),
+      free: vi.fn(),
+    } as unknown as ReturnType<InstanceType<typeof Resvg>['render']>);
+
+    try {
+      let thrown: unknown;
+
+      try {
+        await getPngFromSvgIcon({
+          iconType: 'lucide',
+          iconName: 'check',
+          outputSize: 64,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(IconError);
+      expect(thrown).toEqual(
+        expect.objectContaining({
+          code: 'EMPTY_PNG',
+          stage: 'render',
+          retryable: false,
+        }),
+      );
+    } finally {
+      renderMock.mockRestore();
+      fetchMock.mockRestore();
+    }
+  });
+
   test('rejects an oversized streamed SVG without Content-Length', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -205,6 +246,42 @@ describe('icon generator', () => {
       });
 
       expect(png.byteLength).toBeGreaterThan(0);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('rejects a successful response that does not contain SVG data', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html>not an icon</html>', {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+      }),
+    );
+
+    try {
+      let thrown: unknown;
+
+      try {
+        await getPngFromSvgIcon({
+          iconType: 'lucide',
+          iconName: 'check',
+          outputSize: 64,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(IconError);
+      expect(thrown).toEqual(
+        expect.objectContaining({
+          code: 'INVALID_SVG',
+          stage: 'upstream',
+          retryable: false,
+        }),
+      );
     } finally {
       fetchMock.mockRestore();
     }

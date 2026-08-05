@@ -112,4 +112,67 @@ describe('icon configuration parsing', () => {
       style: 'solid',
     });
   });
+
+  test('rejects a non-integer output size string', () => {
+    expect(() =>
+      parseIconConfig(
+        'lucide',
+        'check',
+        new URLSearchParams({
+          size: '64px',
+        }),
+      ),
+    ).toThrow('size must be an integer');
+  });
+
+  test('defaults Font Awesome icons to solid style', () => {
+    const result = parseIconConfig('font-awesome', 'circle', new URLSearchParams());
+
+    expect(result).toEqual({
+      config: {
+        iconType: 'font-awesome',
+        iconName: 'circle',
+        outputSize: 64,
+        style: 'solid',
+      },
+      normalizedOptions: 'size=64',
+      cacheIdentity: 'circle',
+    });
+  });
+
+  test('defaults Heroicons to 24px outline icons', () => {
+    const result = parseIconConfig('hero', 'academic-cap', new URLSearchParams());
+
+    expect(result).toEqual({
+      config: {
+        iconType: 'hero',
+        iconName: 'academic-cap',
+        outputSize: 64,
+        sourceSize: '24',
+        style: 'outline',
+      },
+      normalizedOptions: 'size=64',
+      cacheIdentity: 'academic-cap',
+    });
+  });
+
+  test('rejects an unknown icon pack', () => {
+    let thrown: unknown;
+
+    try {
+      parseIconConfig('unknown-pack', 'check', new URLSearchParams());
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(IconError);
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        code: 'INVALID_CONFIG',
+        message: 'unknown icon pack unknown-pack',
+        stage: 'validation',
+        retryable: false,
+      }),
+    );
+  });
 });

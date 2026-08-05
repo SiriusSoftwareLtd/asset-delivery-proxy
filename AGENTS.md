@@ -1,182 +1,73 @@
 # AGENTS.md
 
-## Static prefix
-
-Keep this section and all content above any task-specific additions byte-for-byte identical across agent runs when possible. Put dynamic task context after the static repository instructions to improve prompt-cache reuse.
-
-## Repository
+## Project overview
 
 TypeScript Cloudflare Worker for Rayfield Gen2 asset and icon delivery.
 
-Key paths:
+The Worker validates requests, proxies Roblox asset delivery, applies layered caching and bounded upstream coordination, renders supported icon packs to PNG, and exposes its public API through Hono.
 
-- `src/routes/` — HTTP route handlers.
-- `src/services/assets/` — Roblox delivery, caching, extension detection, coordinator client.
-- `src/services/icons/` — icon validation, providers, fetching, rendering.
-- `src/durable-objects/` — asset coordination and backpressure.
-- `src/middleware/` — rate limiting and observability.
-- `src/observability/` — asset metrics.
-- `src/types/` — shared Worker/Hono types.
-- `src/utils/` — shared helpers.
+## Project structure
+
+- `src/worker/` — Worker composition, global middleware, health/root routes, and error handling.
+- `src/http/` — Hono context, middleware, `/v1` route registration, request parsing, and HTTP responses.
+- `src/assets/` — asset-owned types, batch orchestration, and asset-specific rate limiting.
+- `src/services/assets/` — asset cache access, delivery, extension detection, Roblox integration, and coordinator client logic.
+- `src/icons/` — icon cache and delivery orchestration.
+- `src/services/icons/` — icon configuration, providers, fetching, rendering, validation, and supporting types.
+- `src/durable-objects/` — asset coordination, single-flight behavior, cooldowns, retries, and permit scheduling.
+- `src/observability/` — logging, tracing, report-level policy, and metrics.
+- `src/shared/` — cross-feature primitives.
+- `src/infrastructure/` — reusable runtime and infrastructure adapters.
 - `test/` — Vitest Worker tests.
-- `scripts/verify-production.ts` — live production verification.
-- `docs/api.md` — public HTTP contract.
-- `docs/runtime-configuration.md` — bindings, vars, secrets.
-- `docs/asset-rollout-flags.md` — feature-flag behavior.
-- `docs/cd-secrets.md` — deployment requirements.
-- `wrangler.jsonc` — Cloudflare configuration.
-- `worker-configuration.d.ts` — generated; never edit manually.
 
-## Toolchain
+## Baseline setup
 
-Use Node.js 24 and pnpm.
+- Runtime: Node.js 24.
+- Package manager: pnpm 11.
+- Install dependencies: `pnpm install`.
+- Start the local Worker: `pnpm dev`.
+- Run focused tests while iterating: `pnpm test test/<file>.spec.ts`.
+- After changing Cloudflare bindings: `pnpm cf-typegen`.
+- Before reporting code changes complete, run `pnpm typecheck`, `pnpm lint`, and `pnpm coverage`.
 
-```sh
-pnpm install
-pnpm dev
-pnpm test
-pnpm coverage
-pnpm typecheck
-pnpm lint
-pnpm format
-pnpm cf-typegen
-pnpm verify:production
-```
-
-Before reporting code complete:
-
-```sh
-pnpm typecheck
-pnpm lint
-pnpm coverage
-```
-
-Use focused tests while iterating:
-
-```sh
-pnpm test test/<file>.spec.ts
-pnpm test test/<file>.spec.ts -t "<test name>"
-```
-
-Run `pnpm cf-typegen` after changing Cloudflare bindings.
-
-Never run `pnpm deploy` unless explicitly requested.
-
-## Change rules
+## Top-level principles
 
 - Read affected source and tests before editing.
 - Keep patches narrow; avoid unrelated refactors or formatting churn.
-- Preserve existing behavior unless the task requires a change.
-- Do not overwrite unrelated user changes.
+- Preserve existing behavior unless the task requires a behavior change.
+- Keep HTTP adaptation in `src/http/`; feature and service modules must not import Hono route handlers.
 - Keep TypeScript strict; do not introduce `any`.
-- Let Biome format and organize imports.
-- Preserve MPL-2.0 headers.
-- Never commit credentials, private asset IDs, tokens, or production secrets.
-- Update the documentation that owns changed behavior.
-- Do not lower coverage thresholds to make tests pass.
+- Preserve MPL-2.0 source headers.
+- Never commit credentials, tokens, private asset IDs, private fixtures, or production configuration.
+- Never edit `worker-configuration.d.ts` manually; regenerate it with `pnpm cf-typegen`.
+- Never run `pnpm deploy` unless explicitly requested.
+- Update the documentation that owns changed public or operational behavior, and do not lower coverage thresholds to make tests pass.
+- Broader Rayfield documentation belongs in `SiriusSoftwareLtd/docs`. <!-- user-specified -->
 
-## Critical contracts
+## Feature entry points
 
-- Asset IDs: decimal strings, 1–20 digits.
-- Asset routes require `X-Rayfield-Secure-Mode: true`.
-- Asset batches: 1–25 items; preserve order and isolate item failures.
-- Icon batches: 1–50 items; preserve order and isolate item failures.
-- Batch concurrency stays bounded at 6 unless intentionally changed.
-- Supported icon packs: `lucide`, `feather`, `remix`, `font-awesome`, `hero`, `rayfield`.
-- Icon size: integer `1..1024`, default `64`.
-- Handled responses use `X-Request-ID`.
-- Only definitive asset `404`s may be negatively cached.
-- Preserve finite upstream timeouts and `502` vs `504` semantics.
-- Roblox v2 redirects must remain HTTPS and must not receive the Roblox API key.
-- Representation-affecting forwarded inputs must vary the cache key.
-- Respect `OBSERVABILITY_REPORT_LEVEL`; never log secrets.
-- Avoid high-cardinality metric or trace dimensions.
+- Worker composition and global middleware: `src/worker/app.ts`
+- Public API routing: `src/http/routes/registerRoutes.ts`
+- Asset HTTP handling: `src/http/routes/assets.ts`
+- Asset feature logic: `src/assets/` and `src/services/assets/`
+- Icon HTTP handling: `src/http/routes/icons.ts`
+- Icon feature logic: `src/icons/` and `src/services/icons/`
+- Asset coordination and backpressure: `src/durable-objects/`
+- Logging, tracing, and metrics: `src/observability/`
 
-## Asset rollout
+Public asset and icon routes are registered under `/v1`. `/health` and the root redirect remain outside the versioned API.
 
-Flags:
+## Git commits
 
-- `use-asset-delivery-v2`
-- `asset-cache-hit-exempt-limit`
-- `asset-cache-layered`
-- `asset-upstream-coordinator`
-- `asset-upstream-backpressure`
+Every Git commit must follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) and include exactly one appropriate Gitmoji in the subject. <!-- user-specified -->
 
-Flag evaluation must fail closed to the `false` path.
-
-Resilience rollout order:
-
-1. `asset-cache-hit-exempt-limit`
-2. `asset-cache-layered`
-3. `asset-upstream-coordinator`
-4. `asset-upstream-backpressure`
-
-Backpressure requires:
-
-```text
-asset-upstream-coordinator = true
-ASSET_COORDINATOR_BUDGET_VERIFIED = true
-```
-
-Do not weaken this gate incidentally.
-
-## Documentation ownership
-
-- Public HTTP behavior → `docs/api.md`
-- Bindings, vars, secrets → `docs/runtime-configuration.md`
-- Asset flags and rollout → `docs/asset-rollout-flags.md`
-- Deployment/CD → `docs/cd-secrets.md`
-- Setup and repository overview → `README.md`
-- Contribution workflow → `CONTRIBUTING.md`
-- Security-sensitive reporting → `SECURITY.md`
-
-Broader Rayfield documentation belongs in `SiriusSoftwareLtd/docs`.
-
-## Subagents and critics
-
-Use subagents only for bounded, independent work that would otherwise inflate orchestrator context.
-
-Delegate with:
-
-- A precise question or file scope.
-- Only the minimum relevant context.
-- A compact required result format.
-
-Subagents return findings, evidence, and proposed changes—not reasoning transcripts or large source excerpts.
-
-The orchestrator owns:
-
-- Task decomposition.
-- Cross-file decisions.
-- Final implementation choices.
-- Integration.
-- Validation.
-- User-facing output.
-
-Use a critic only after a concrete draft, patch, or conclusion exists.
-
-Critics return only:
-
-- Blocking issues.
-- Material correctness risks.
-- Missing validation.
-- Concise recommended fixes.
-
-Do not recursively delegate or ask multiple agents to duplicate the same investigation.
-
-## Commits and pull requests
-
-Follow `CONTRIBUTING.md`.
-
-Every Git commit message must follow Conventional Commits 1.0.0 and include exactly one Gitmoji in the subject.
-
-Required format:
+Required format: <!-- user-specified -->
 
 ```text
 <type>[optional scope][!]: <gitmoji> <description>
 ```
 
-Examples:
+Examples: <!-- user-specified -->
 
 ```text
 feat(worker): ✨ add icon URL resolver
@@ -185,30 +76,36 @@ docs(api): 📝 document batch response fields
 refactor(assets)!: ♻️ replace legacy cache identity
 ```
 
-Use `feat` for features and `fix` for bug fixes. Other valid types include:
+Commit rules: <!-- user-specified -->
 
-- `build`
-- `chore`
-- `ci`
-- `docs`
-- `perf`
-- `refactor`
-- `revert`
-- `style`
-- `test`
+- Use `feat` for a new feature.
+- Use `fix` for a bug fix.
+- Other valid types include `build`, `chore`, `ci`, `docs`, `perf`, `refactor`, `revert`, `style`, and `test`.
+- Add a scope when it clarifies the affected subsystem.
+- Include exactly one Gitmoji between the colon and description.
+- Keep the description short, imperative, and lowercase.
+- Do not end the subject with a period.
+- Use `!` immediately before the colon when the commit introduces a breaking change.
+- Breaking changes may also use a `BREAKING CHANGE:` footer.
+- Separate an optional body from the subject with one blank line.
+- Separate optional footers from the body with one blank line.
+- Optional bodies and footers must also follow Conventional Commits 1.0.0.
+- Do not create a commit that omits the Gitmoji or violates the Conventional Commits structure.
 
-Use a scope when it clarifies the affected subsystem.
-
-Keep descriptions short, imperative, and lowercase.
-
-For breaking changes, use `!` before the colon and/or a `BREAKING CHANGE:` footer:
+Breaking-change example:
 
 ```text
-feat(api)!: 💥 change asset batch response shape
+refactor(assets)!: ♻️ replace legacy cache identity
 
-BREAKING CHANGE: asset batch results now use the new response schema.
+BREAKING CHANGE: asset cache keys now use the canonical v2 identity.
 ```
 
-Optional bodies and footers must also follow Conventional Commits 1.0.0.
+## Reference index
 
-Do not create commits that omit the Gitmoji or violate the Conventional Commits structure.
+- [`README.md`](README.md) — read for setup, service overview, development commands, and deployment context.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — read before making a change; it owns contribution, pull request, and detailed workflow rules.
+- [`docs/api.md`](docs/api.md) — read before changing routes, request validation, batch behavior, caching, upstream behavior, or response contracts.
+- [`docs/runtime-configuration.md`](docs/runtime-configuration.md) — read before changing Cloudflare bindings, variables, secrets, or runtime settings.
+- [`docs/asset-rollout-flags.md`](docs/asset-rollout-flags.md) — read before changing asset resilience flags, rollout dependencies, or fallback behavior.
+- [`docs/cd-secrets.md`](docs/cd-secrets.md) — read before changing deployment or GitHub environment requirements.
+- [`SECURITY.md`](SECURITY.md) — read before changing security-sensitive behavior or handling vulnerability reports.
