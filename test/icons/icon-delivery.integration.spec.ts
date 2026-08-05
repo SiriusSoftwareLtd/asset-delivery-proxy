@@ -7,33 +7,8 @@
 import { env } from 'cloudflare:test';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MAX_PNG_BYTES } from '../../src/services/icons/constants';
+import { createInMemoryKv as createCache } from '../helpers/in-memory-kv';
 import worker from '../worker';
-
-function createCache() {
-  const values = new Map<string, { value: ArrayBuffer; metadata?: unknown }>();
-
-  return {
-    values,
-
-    async getWithMetadata<T>(key: string) {
-      const stored = values.get(key);
-
-      return {
-        value: stored?.value ?? null,
-        metadata: (stored?.metadata as T | undefined) ?? null,
-      };
-    },
-
-    async put(key: string, value: ArrayBuffer, options?: { metadata?: unknown }) {
-      values.set(key, {
-        value,
-        metadata: options?.metadata,
-      });
-    },
-
-    async delete() {},
-  };
-}
 
 function createTestEnv(assetCache = createCache()) {
   return {

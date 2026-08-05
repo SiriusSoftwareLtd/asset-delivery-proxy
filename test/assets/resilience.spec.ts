@@ -12,7 +12,7 @@ let assetIdSequence = 0;
 
 function uniqueAssetId(): string {
   assetIdSequence += 1;
-  return `${Date.now()}${assetIdSequence.toString().padStart(4, '0')}`;
+  return `900000${assetIdSequence.toString().padStart(4, '0')}`;
 }
 
 describe('asset resilience primitives', () => {

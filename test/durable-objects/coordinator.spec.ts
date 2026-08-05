@@ -22,8 +22,11 @@ type CoordinatorInternals = {
   };
 };
 
+let stubSequence = 0;
+
 function createStub(label: string) {
-  return env.ASSET_RESOLUTION_COORDINATOR.getByName(`${label}-${crypto.randomUUID()}`);
+  stubSequence += 1;
+  return env.ASSET_RESOLUTION_COORDINATOR.getByName(`${label}-${stubSequence}`);
 }
 
 describe('asset resolution coordinator internals', () => {
