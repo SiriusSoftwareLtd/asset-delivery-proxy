@@ -96,7 +96,7 @@ describe('icon generator', () => {
     const renderMock = vi.spyOn(Resvg.prototype, 'render').mockReturnValue({
       asPng: () => new Uint8Array(),
       free: vi.fn(),
-    } as unknown as ReturnType<Resvg['render']>);
+    } as unknown as ReturnType<InstanceType<typeof Resvg>['render']>);
 
     try {
       let thrown: unknown;
