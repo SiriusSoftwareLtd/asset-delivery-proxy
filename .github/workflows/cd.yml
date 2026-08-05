@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   verify-current-main:
+    timeout-minutes: 5
     name: Verify Current Main Head
     if: >-
       ${{
@@ -69,6 +70,7 @@ jobs:
           CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
 
   deploy:
+    timeout-minutes: 15
     name: Deploy Worker
     needs: verify-current-main
     if: needs.verify-current-main.outputs.should_deploy == 'true'
