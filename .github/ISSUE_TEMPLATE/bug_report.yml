@@ -1,6 +1,8 @@
 name: Bug Report
 description: Report a reproducible problem with the Asset Delivery Proxy.
 title: "[Bug]: "
+labels:
+  - bug
 body:
   - type: markdown
     attributes:

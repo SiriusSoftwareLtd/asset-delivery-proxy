@@ -1,6 +1,8 @@
 name: Feature Request
 description: Propose a change or new capability for the Asset Delivery Proxy.
 title: "[Feature]: "
+labels:
+  - enhancement
 body:
   - type: markdown
     attributes:
