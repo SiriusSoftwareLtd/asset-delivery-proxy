@@ -153,7 +153,7 @@ async function getSvgIconContent(iconConfig: SvgIconConfig, reportLevel: string)
   );
 }
 
-function createRenderConfig(outputSize: number, providedConfig: ResvgRenderOptions = {}): ResvgRenderOptions {
+function createRenderConfig(outputSize: number, providedConfig: ResvgRenderOptions): ResvgRenderOptions {
   const providedFont = providedConfig.font;
 
   /*
@@ -161,12 +161,12 @@ function createRenderConfig(outputSize: number, providedConfig: ResvgRenderOptio
    * Explicit font buffers are retained when the caller provides them.
    */
   const font =
-    providedFont && 'fontBuffers' in providedFont
-      ? providedFont
-      : {
-          ...(providedFont ?? {}),
+    providedFont === undefined || !('fontBuffers' in providedFont)
+      ? {
+          ...providedFont,
           loadSystemFonts: false,
-        };
+        }
+      : providedFont;
 
   return {
     ...providedConfig,
