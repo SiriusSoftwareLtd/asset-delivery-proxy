@@ -1,5 +1,13 @@
 import { describe, expect, test, vi } from 'vitest';
-import { type AssetCacheEntry, logCacheError, populateL1, readKv, readL1 } from '../src/services/assets/cache';
+import {
+  type AssetCacheEntry,
+  logCacheError,
+  populateL1,
+  readKv,
+  readL1,
+  writeAssetToKv,
+  writeNotFoundToKv,
+} from '../src/services/assets/cache';
 import type { AssetResolutionIdentity } from '../src/types/app';
 
 const identity: AssetResolutionIdentity = {
@@ -104,6 +112,20 @@ describe('asset cache validation', () => {
         storedAt: Date.now() - 10_000,
         freshUntil: Date.now() - 5_000,
         staleUntil: Date.now() - 1,
+      },
+    ],
+    [
+      'non-numeric asset timestamp',
+      {
+        ...validMetadata(),
+        timestamp: 'invalid',
+      },
+    ],
+    [
+      'non-finite asset timestamp',
+      {
+        ...validMetadata(),
+        timestamp: Number.NaN,
       },
     ],
   ])('treats %s as a recoverable cache miss', async (_label, metadata) => {
@@ -327,5 +349,96 @@ describe('asset cache validation', () => {
     });
 
     expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['with an extension', '.png'],
+    ['without an extension', undefined],
+  ])('reads valid L1 metadata %s', async (_label, extension) => {
+    const now = Date.now();
+
+    const headers = new Headers({
+      'X-Asset-Fresh-Until': String(now + 60_000),
+      'X-Asset-Stale-Until': String(now + 120_000),
+      'X-Asset-Stored-At': String(now),
+      'X-Asset-Timestamp': String(now),
+      'X-Asset-Content-Type': 'image/png',
+    });
+
+    if (extension !== undefined) {
+      headers.set('X-Asset-Extension', extension);
+    }
+
+    const matchMock = vi.spyOn(caches.default, 'match').mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers,
+        }),
+    );
+
+    try {
+      const result = await readL1(identity, now);
+
+      expect(result.kind).toBe('asset');
+
+      if (result.kind !== 'asset') {
+        throw new Error('Expected L1 asset result');
+      }
+
+      expect(result.entry.metadata.extension).toBe(extension);
+      expect(result.entry.data).toEqual(new Uint8Array([1, 2, 3]));
+    } finally {
+      matchMock.mockRestore();
+    }
+  });
+
+  test('uses the current time when KV write timestamps are omitted', async () => {
+    const putMock = vi.fn(
+      async (
+        _key: string,
+        _value: ArrayBuffer,
+        _options?: {
+          expirationTtl?: number;
+          metadata?: unknown;
+        },
+      ) => {},
+    );
+
+    const namespace = {
+      put: putMock,
+    } as unknown as KVNamespace;
+
+    const before = Date.now();
+
+    const metadata = await writeAssetToKv(namespace, identity, new Uint8Array([1, 2, 3]), 'image/png', '.png');
+
+    const after = Date.now();
+
+    expect(metadata.timestamp).toBeGreaterThanOrEqual(before);
+    expect(metadata.timestamp).toBeLessThanOrEqual(after);
+
+    await writeNotFoundToKv(namespace, identity);
+
+    const negativeCall = putMock.mock.calls[1];
+
+    if (!negativeCall) {
+      throw new Error('Expected negative-cache KV write');
+    }
+
+    const options = negativeCall[2] as
+      | {
+          metadata?: {
+            kind?: string;
+            timestamp?: number;
+          };
+        }
+      | undefined;
+
+    expect(options?.metadata).toEqual(
+      expect.objectContaining({
+        kind: 'not-found',
+        timestamp: expect.any(Number),
+      }),
+    );
   });
 });
