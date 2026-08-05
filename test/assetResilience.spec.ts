@@ -100,6 +100,54 @@ describe('asset resilience primitives', () => {
     await env.assetCache.delete(identity.physicalKey);
   });
 
+  test('retries once when the upstream fetch fails before receiving a response', async () => {
+    const assetId = uniqueAssetId();
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`fetch-retry-${assetId}`);
+
+    let attempt = 0;
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      attempt += 1;
+
+      if (attempt === 1) {
+        throw new Error('upstream connection failed');
+      }
+
+      return new Response(new Uint8Array([5]), {
+        headers: {
+          'Content-Type': 'image/png',
+        },
+      });
+    });
+
+    try {
+      const result = await stub.resolve({
+        identity,
+        deadline: Date.now() + 5_000,
+        backpressure: true,
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          kind: 'asset',
+          status: 200,
+          attempts: 2,
+          origin: 'upstream',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchMock.mockRestore();
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
   test('marks an already-expired coordinator request as admission without fetching upstream', async () => {
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
