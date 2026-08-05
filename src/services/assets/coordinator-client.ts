@@ -5,11 +5,7 @@
  */
 
 import type { AssetResolutionIdentity, AssetResolutionResult } from '../../assets/types';
-
-function readInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
-}
+import { readInteger } from '../../shared/config';
 
 export function coordinatorShard(identity: AssetResolutionIdentity, shardCount: number): number {
   const prefix = Number.parseInt(identity.shardKey.slice(0, 8), 16);

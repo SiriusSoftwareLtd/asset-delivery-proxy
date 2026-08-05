@@ -15,6 +15,8 @@ import type {
 } from '../assets/types';
 import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../assets/upstream/roblox';
 import { cancelResponseBody } from '../infrastructure/http/cancelResponseBody';
+import { readInteger } from '../shared/config';
+import { jitter, sleepWithinDeadline } from '../shared/timing';
 import {
   AssetResolutionPermitDeadlineError,
   AssetResolutionPermitQueue,
@@ -32,27 +34,6 @@ class CooldownError extends Error {
   }
 }
 class PermitDeadlineError extends Error {}
-
-function readInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function sleepWithinDeadline(milliseconds: number, deadline: number): Promise<boolean> {
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) return false;
-  await sleep(Math.min(milliseconds, remainingMs));
-  return Date.now() < deadline;
-}
-
-function jitter(milliseconds: number): number {
-  const random = crypto.getRandomValues(new Uint8Array(1))[0] ?? 0;
-  return Math.floor(milliseconds * (0.5 + random / 255));
-}
 
 function originForAttempts(attempts: number): AssetResolutionOrigin {
   return attempts === 0 ? 'admission' : 'upstream';
