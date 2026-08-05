@@ -4,8 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { describe, expect, test } from 'vitest';
-import { extensionFromContentType, extensionFromPrefix, resolveAssetExtension } from '../src/services/assets/extension';
+import { describe, expect, test, vi } from 'vitest';
+import {
+  extensionFromContentType,
+  extensionFromPrefix,
+  readPrefixAndRestoreBody,
+  resolveAssetExtension,
+} from '../src/services/assets/extension';
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 
