@@ -6,72 +6,79 @@ import {
 } from '../src/durable-objects/assetResolutionPermitQueue';
 
 describe('AssetResolutionPermitQueue', () => {
-  it('grants permits and releases queued work', async () => {
+  it('grants a permit and dispatches the next queued caller after release', async () => {
     const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
     const first = await queue.acquire(Date.now() + 1_000);
     const second = queue.acquire(Date.now() + 1_000);
-    expect(queue.activeCount).toBe(1);
-    queue.release();
-    await expect(second).resolves.toMatchObject({ queueTimeMs: expect.any(Number) });
+
     expect(first.queueTimeMs).toBeGreaterThanOrEqual(0);
+    expect(queue.activeCount).toBe(1);
+    expect(queue.queuedCount).toBe(1);
+
     queue.release();
+
+    await expect(second).resolves.toMatchObject({
+      queueTimeMs: expect.any(Number),
+    });
+
+    expect(queue.activeCount).toBe(1);
+    expect(queue.queuedCount).toBe(0);
+
+    queue.release();
+
+    expect(queue.activeCount).toBe(0);
   });
 
-  it('rejects a full queue', async () => {
+  it('rejects a caller when the queue is full', async () => {
     const queue = new AssetResolutionPermitQueue(1, 0, 0);
+
     await queue.acquire(Date.now() + 1_000);
+
     await expect(queue.acquire(Date.now() + 1_000)).rejects.toBeInstanceOf(AssetResolutionQueueFullError);
+
+    queue.release();
   });
 
-  it('does not retain expired waiters', async () => {
+  it('rejects a deadline that has already been reached', async () => {
     const queue = new AssetResolutionPermitQueue(1, 1, 0);
-    await queue.acquire(Date.now() + 1_000);
-    const deadline = Date.now() + 10;
-    const queued = queue.acquire(deadline);
-    await expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
-    queue.release();
+
+    await expect(queue.acquire(Date.now())).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+    expect(queue.activeCount).toBe(0);
     expect(queue.queuedCount).toBe(0);
   });
 
-  it('restores persisted permit timing and rejects queued callers', async () => {
-    const values = new Map<string, number>([['nextPermitAt', Date.now() - 1]]);
-    const storage = {
-      get: async (key: string) => values.get(key),
-      put: async (key: string, value: number) => {
-        values.set(key, value);
-      },
-    } as unknown as DurableObjectStorage;
-    const queue = new AssetResolutionPermitQueue(1, 1, 1, storage);
-    await queue.restore();
-    await queue.acquire(Date.now() + 1_000);
-    const queued = queue.acquire(Date.now() + 1_000);
-    const error = new Error('cooldown');
-    queue.rejectQueued(error);
-    await expect(queued).rejects.toBe(error);
-    queue.release();
-    expect(values.has('nextPermitAt')).toBe(true);
-  });
+  it('expires a queued caller when its deadline is reached', async () => {
+    vi.useFakeTimers();
 
-  it('waits for a scheduled interval before granting the next permit', async () => {
-    const queue = new AssetResolutionPermitQueue(1, 1, 5);
-    await queue.acquire(Date.now() + 1_000);
-    queue.release();
-    const started = Date.now();
-    await queue.acquire(Date.now() + 1_000);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(4);
-    queue.release();
-  });
+    try {
+      vi.setSystemTime(new Date(1_000));
 
-  it('releases a permit when persisted timing cannot be written', async () => {
-    const storage = {
-      get: async () => 0,
-      put: async () => {
-        throw new Error('storage unavailable');
-      },
-    } as unknown as DurableObjectStorage;
-    const queue = new AssetResolutionPermitQueue(1, 0, 0, storage);
-    await expect(queue.acquire(Date.now() + 1_000)).rejects.toThrow('storage unavailable');
-    expect(queue.activeCount).toBe(0);
+      const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+      await queue.acquire(2_000);
+
+      const queued = queue.acquire(1_100);
+
+      expect(queue.queuedCount).toBe(1);
+
+      // Attach the rejection handler before advancing the timer that
+      // causes the promise to reject.
+      const rejection = expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await rejection;
+
+      expect(queue.queuedCount).toBe(0);
+
+      queue.release();
+
+      expect(queue.activeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('expires queued work during dispatch when its deadline has passed', async () => {
@@ -89,9 +96,11 @@ describe('AssetResolutionPermitQueue', () => {
       // Move Date.now() past the deadline without running the waiter's timer.
       vi.setSystemTime(new Date(1_200));
 
+      const rejection = expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
       queue.release();
 
-      await expect(queued).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+      await rejection;
 
       expect(queue.queuedCount).toBe(0);
       expect(queue.activeCount).toBe(0);
@@ -100,13 +109,159 @@ describe('AssetResolutionPermitQueue', () => {
     }
   });
 
-  it('rejects a deadline that has already been reached', async () => {
-    const queue = new AssetResolutionPermitQueue(1, 1, 0);
+  it('preserves a queued caller whose deadline has not expired', async () => {
+    vi.useFakeTimers();
 
-    await expect(queue.acquire(Date.now())).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+      await queue.acquire(5_000);
+
+      const queued = queue.acquire(4_000);
+
+      expect(queue.queuedCount).toBe(1);
+
+      // acquire() performs an expiration sweep. The existing waiter is
+      // still valid, so it must remain queued and keep the queue full.
+      await expect(queue.acquire(3_000)).rejects.toBeInstanceOf(AssetResolutionQueueFullError);
+
+      expect(queue.queuedCount).toBe(1);
+
+      queue.release();
+
+      await expect(queued).resolves.toMatchObject({
+        queueTimeMs: expect.any(Number),
+      });
+
+      expect(queue.queuedCount).toBe(0);
+      expect(queue.activeCount).toBe(1);
+
+      queue.release();
+
+      expect(queue.activeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects all queued callers when requested', async () => {
+    const queue = new AssetResolutionPermitQueue(1, 2, 0);
+
+    await queue.acquire(Date.now() + 1_000);
+
+    const firstQueued = queue.acquire(Date.now() + 1_000);
+    const secondQueued = queue.acquire(Date.now() + 1_000);
+
+    expect(queue.queuedCount).toBe(2);
+
+    const error = new Error('cooldown');
+
+    const firstRejection = expect(firstQueued).rejects.toBe(error);
+    const secondRejection = expect(secondQueued).rejects.toBe(error);
+
+    queue.rejectQueued(error);
+
+    await Promise.all([firstRejection, secondRejection]);
+
+    expect(queue.queuedCount).toBe(0);
+    expect(queue.activeCount).toBe(1);
+
+    queue.release();
 
     expect(queue.activeCount).toBe(0);
-    expect(queue.queuedCount).toBe(0);
+  });
+
+  it('does not allow the active permit count to become negative', () => {
+    const queue = new AssetResolutionPermitQueue(1, 1, 0);
+
+    expect(queue.activeCount).toBe(0);
+
+    queue.release();
+    queue.release();
+
+    expect(queue.activeCount).toBe(0);
+  });
+
+  it('waits for the scheduled permit interval before granting another permit', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 50);
+
+      await queue.acquire(2_000);
+      queue.release();
+
+      const second = queue.acquire(2_000);
+
+      let settled = false;
+
+      void second.finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(49);
+
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(second).resolves.toMatchObject({
+        queueTimeMs: 50,
+      });
+
+      queue.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores persisted permit timing', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const values = new Map<string, number>([['nextPermitAt', 1_100]]);
+
+      const storage = {
+        get: async (key: string) => values.get(key),
+        put: async (key: string, value: number) => {
+          values.set(key, value);
+        },
+      } as unknown as DurableObjectStorage;
+
+      const queue = new AssetResolutionPermitQueue(1, 1, 50, storage);
+
+      await queue.restore();
+
+      const permit = queue.acquire(2_000);
+
+      let settled = false;
+
+      void permit.finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(99);
+
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(permit).resolves.toMatchObject({
+        queueTimeMs: 100,
+      });
+
+      expect(values.get('nextPermitAt')).toBe(1_150);
+
+      queue.release();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects when restored permit timing cannot meet the deadline', async () => {
@@ -127,20 +282,37 @@ describe('AssetResolutionPermitQueue', () => {
       await expect(queue.acquire(1_500)).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
 
       expect(queue.activeCount).toBe(0);
+      expect(queue.queuedCount).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
+  it('releases a permit when persisted timing cannot be written', async () => {
+    const storage = {
+      get: async () => 0,
+      put: async () => {
+        throw new Error('storage unavailable');
+      },
+    } as unknown as DurableObjectStorage;
+
+    const queue = new AssetResolutionPermitQueue(1, 0, 0, storage);
+
+    await expect(queue.acquire(Date.now() + 1_000)).rejects.toThrow('storage unavailable');
+
+    expect(queue.activeCount).toBe(0);
+  });
+
   it('releases a permit when its deadline expires while persisting permit timing', async () => {
     let now = 1_000;
+
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
     const storage = {
       get: async () => 0,
       put: async () => {
-        // Simulate the storage write taking long enough for the
-        // request deadline to expire.
+        // Simulate the storage write taking long enough for the request
+        // deadline to expire.
         now = 1_200;
       },
     } as unknown as DurableObjectStorage;
