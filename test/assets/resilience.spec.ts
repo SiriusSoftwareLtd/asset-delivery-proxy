@@ -7,6 +7,8 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, test, vi } from 'vitest';
 import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
+import { runInDurableObject } from 'cloudflare:test';
+import { AssetResolutionCoordinator } from '../../src';
 
 let assetIdSequence = 0;
 
@@ -21,8 +23,6 @@ describe('asset resilience primitives', () => {
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
-
-    await env.assetCache.delete(identity.physicalKey);
 
     const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`coalescing-${assetId}`);
 
@@ -39,6 +39,7 @@ describe('asset resilience primitives', () => {
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       signalFetchStarted();
+
       await fetchGate;
 
       return new Response(new Uint8Array([1, 2, 3]), {
@@ -49,35 +50,38 @@ describe('asset resilience primitives', () => {
     });
 
     try {
-      const calls = Array.from({ length: callerCount }, () =>
-        stub.resolve({
-          identity,
-          deadline: Date.now() + 10_000,
-          backpressure: false,
-        }),
-      );
+      const results = await runInDurableObject(stub, async (instance: AssetResolutionCoordinator) => {
+        const calls = Array.from({ length: callerCount }, () =>
+          instance.resolve({
+            identity,
+            deadline: Date.now() + 10_000,
+            backpressure: false,
+          }),
+        );
 
-      await fetchStarted;
+        await fetchStarted;
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        releaseFetch();
+
+        return Promise.all(calls);
+      });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      releaseFetch();
+      expect(
+        results.every((result) => result.kind === 'asset' && result.status === 200 && result.origin === 'upstream'),
+      ).toBe(true);
 
-      const results = await Promise.all(calls);
+      expect(results.filter((result) => !result.joined)).toHaveLength(1);
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
-
-      expect(results.filter((result) => result.joined).length).toBeGreaterThan(0);
+      expect(results.filter((result) => result.joined)).toHaveLength(callerCount - 1);
 
       expect(results.filter((result) => !result.joined && result.attempts === 1)).toHaveLength(1);
-
-      expect(results.filter((result) => result.joined || result.origin === 'kv')).toHaveLength(callerCount - 1);
     } finally {
       fetchMock.mockRestore();
       releaseFetch();
-      await env.assetCache.delete(identity.physicalKey);
     }
   });
 
