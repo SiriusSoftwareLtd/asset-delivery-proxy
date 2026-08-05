@@ -83,13 +83,20 @@ export class AssetResolutionPermitQueue {
 
   private async grant(enqueuedAt: number, deadline: number): Promise<AssetResolutionPermit> {
     const scheduledAt = Math.max(Date.now(), this.nextPermitAt);
-    if (scheduledAt >= deadline) throw new AssetResolutionPermitDeadlineError();
     this.active += 1;
+
     try {
+      if (scheduledAt >= deadline) throw new AssetResolutionPermitDeadlineError();
+
       this.nextPermitAt = scheduledAt + this.permitIntervalMs;
       await this.storage?.put('nextPermitAt', this.nextPermitAt);
-      if (scheduledAt > Date.now()) await new Promise<void>((resolve) => setTimeout(resolve, scheduledAt - Date.now()));
+
+      if (scheduledAt > Date.now()) {
+        await new Promise<void>((resolve) => setTimeout(resolve, scheduledAt - Date.now()));
+      }
+
       if (Date.now() >= deadline) throw new AssetResolutionPermitDeadlineError();
+
       return { queueTimeMs: Math.max(0, Date.now() - enqueuedAt) };
     } catch (error) {
       this.release();

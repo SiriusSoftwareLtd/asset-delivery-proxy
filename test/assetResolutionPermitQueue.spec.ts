@@ -384,4 +384,45 @@ describe('AssetResolutionPermitQueue', () => {
 
     expect(queue.activeCount).toBe(0);
   });
+
+  it('continues dispatching after a queued caller cannot meet permit timing', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.setSystemTime(new Date(1_000));
+
+      const queue = new AssetResolutionPermitQueue(1, 2, 100);
+
+      await queue.acquire(5_000);
+
+      const unschedulable = queue.acquire(1_050);
+      const schedulable = queue.acquire(2_000);
+
+      expect(queue.activeCount).toBe(1);
+      expect(queue.queuedCount).toBe(2);
+
+      const rejection = expect(unschedulable).rejects.toBeInstanceOf(AssetResolutionPermitDeadlineError);
+
+      queue.release();
+
+      await rejection;
+
+      // The failed waiter must not leave the queue idle. The next waiter
+      // should already own the active slot while it waits for t=1_100.
+      expect(queue.activeCount).toBe(1);
+      expect(queue.queuedCount).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(schedulable).resolves.toMatchObject({
+        queueTimeMs: 100,
+      });
+
+      queue.release();
+
+      expect(queue.activeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
