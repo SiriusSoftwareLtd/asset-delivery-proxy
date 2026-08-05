@@ -7,4 +7,7 @@
 export { observeRequests } from '../http/middleware/observeRequests';
 export { getErrorFields, logEvent } from '../observability/logging';
 export { parseReportLevel, shouldReport } from '../observability/reportLevel';
-export { enterTraceSpan } from '../observability/tracing';
+export {
+  enterTraceSpan,
+  enterTraceSpanWithRuntime,
+} from '../observability/tracing';

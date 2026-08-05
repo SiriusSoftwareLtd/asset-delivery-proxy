@@ -6,7 +6,13 @@
 
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
-import { enterTraceSpan, getErrorFields, parseReportLevel, shouldReport } from '../src/middleware/observability';
+import { getErrorFields, parseReportLevel, shouldReport } from '../src/middleware/observability';
+import {
+  enterTraceSpan,
+  enterTraceSpanWithRuntime,
+  type TraceRuntime,
+  type TraceSpan,
+} from '../src/observability/tracing';
 import worker from './worker';
 
 function createEnv(reportLevel?: string): CloudflareBindings {
@@ -45,6 +51,32 @@ describe('observability report levels', () => {
         'info',
       ),
     ).toBe('ok');
+  });
+
+  test('uses the runtime trace span when enterSpan is available', () => {
+    const setAttribute = vi.fn();
+
+    const runtime: TraceRuntime = {
+      enterSpan<T>(_name: string, callback: (span: TraceSpan) => T | Promise<T>): T | Promise<T> {
+        return callback({ setAttribute });
+      },
+    };
+
+    const enterSpanSpy = vi.spyOn(runtime, 'enterSpan');
+
+    const result = enterTraceSpanWithRuntime(
+      runtime,
+      'test.operation',
+      (span) => {
+        span.setAttribute('asset.id', '123');
+        return 'completed';
+      },
+      'info',
+    );
+
+    expect(result).toBe('completed');
+    expect(enterSpanSpy).toHaveBeenCalledTimes(1);
+    expect(setAttribute).toHaveBeenCalledWith('asset.id', '123');
   });
 
   test.each([
