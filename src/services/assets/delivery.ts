@@ -8,6 +8,7 @@ import { HTTPException } from 'hono/http-exception';
 import { limitAssetMiss } from '../../assets/rateLimit';
 import type { AssetResolutionIdentity, AssetResolutionResult, CacheStatus } from '../../assets/types';
 import type { AppContext } from '../../http/context';
+import { cancelResponseBody } from '../../infrastructure/http/cancelResponseBody';
 import { writeAssetMetric } from '../../observability/assetMetrics';
 import { getErrorFields, logEvent } from '../../observability/logging';
 import { enterTraceSpan } from '../../observability/tracing';
@@ -136,7 +137,7 @@ export async function resolveDirect(
     if (!response.ok) {
       if (response.status === 404) {
         const timestamp = Date.now();
-        await response.body?.cancel().catch(() => undefined);
+        await cancelResponseBody(response);
         let cacheStatus: CacheStatus = 'negative-write';
         try {
           await writeNotFoundToKv(c.env.assetCache, identity, timestamp);

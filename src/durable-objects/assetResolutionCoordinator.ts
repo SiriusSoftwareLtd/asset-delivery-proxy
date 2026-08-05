@@ -14,6 +14,7 @@ import type {
   AssetResolutionResult,
 } from '../assets/types';
 import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../assets/upstream/roblox';
+import { cancelResponseBody } from '../infrastructure/http/cancelResponseBody';
 import {
   AssetResolutionPermitDeadlineError,
   AssetResolutionPermitQueue,
@@ -230,7 +231,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
           if (!response.ok) {
             if (upstreamStatus === 404) {
               const timestamp = Date.now();
-              await response.body?.cancel().catch(() => undefined);
+              await cancelResponseBody(response);
               let cacheWrite: AssetCacheWriteOutcome = 'written';
               try {
                 await writeNotFoundToKv(this.env.assetCache, request.identity, timestamp);
@@ -254,7 +255,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
             if (upstreamStatus === 429) {
               const retryAfter = parseRetryAfter(response.headers.get('Retry-After')) ?? this.fallbackCooldownSeconds;
               if (request.backpressure) await this.enterCooldown(retryAfter);
-              await response.body?.cancel().catch(() => undefined);
+              await cancelResponseBody(response);
               return this.errorResult(
                 429,
                 response.statusText || 'Too Many Requests',
@@ -272,7 +273,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
               attempt === 1 &&
               Date.now() < request.deadline
             ) {
-              await response.body?.cancel().catch(() => undefined);
+              await cancelResponseBody(response);
               this.releasePermit();
               permitHeld = false;
               if (!(await sleepWithinDeadline(jitter(this.retryBaseMs), request.deadline))) {
