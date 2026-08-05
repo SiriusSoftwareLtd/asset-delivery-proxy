@@ -24,6 +24,8 @@ type CoordinatorInternals = {
 
   resolveUncoalesced(request: AssetCoordinatorRequest): Promise<AssetResolutionResult>;
 
+  acquirePermit(deadline: number): Promise<Permit>;
+
   grantPermit(enqueuedAt: number, deadline: number): Promise<Permit>;
 
   enterCooldown(retryAfter: number): Promise<void>;
@@ -352,6 +354,75 @@ describe('asset resolution coordinator internals', () => {
         } finally {
           reader?.releaseLock();
           fetchMock.mockRestore();
+        }
+      });
+    } finally {
+      await env.assetCache.delete(identity.physicalKey);
+    }
+  });
+
+  test('returns a timeout when the deadline expires immediately after permit admission', async () => {
+    const assetId = `7${Date.now()}`;
+
+    const identity = await buildAssetResolutionIdentity(
+      assetId,
+      new Request(`https://proxy.test/assets/${assetId}`),
+      false,
+    );
+
+    await env.assetCache.delete(identity.physicalKey);
+
+    const stub = createStub('deadline-after-permit');
+
+    try {
+      await runInDurableObject(stub, async (instance) => {
+        const coordinator = instance as unknown as CoordinatorInternals;
+
+        const deadline = 10_000;
+
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+
+        const originalAcquirePermit = coordinator.acquirePermit.bind(coordinator);
+
+        const acquirePermitMock = vi.fn(async () => {
+          // Admission succeeds, but the request expires before
+          // the upstream fetch begins.
+          nowSpy.mockReturnValue(deadline);
+
+          return {
+            queueTimeMs: 17,
+          };
+        });
+
+        coordinator.acquirePermit = acquirePermitMock;
+
+        const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+        try {
+          const result = await coordinator.resolveUncoalesced({
+            identity,
+            deadline,
+            backpressure: true,
+          });
+
+          expect(result).toEqual(
+            expect.objectContaining({
+              kind: 'error',
+              status: 504,
+              error: 'Roblox asset delivery timed out',
+              attempts: 0,
+              queueTimeMs: 17,
+              origin: 'admission',
+            }),
+          );
+
+          expect(acquirePermitMock).toHaveBeenCalledTimes(1);
+          expect(fetchMock).not.toHaveBeenCalled();
+          expect(coordinator.active).toBe(0);
+        } finally {
+          coordinator.acquirePermit = originalAcquirePermit;
+          fetchMock.mockRestore();
+          nowSpy.mockRestore();
         }
       });
     } finally {
