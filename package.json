@@ -2,6 +2,7 @@
 	"name": "asset-delivery-proxy",
 	"version": "1.0.0",
 	"private": true,
+	"license": "MPL-2.0",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "cross-env X_LOCAL_OBSERVABILITY=true wrangler dev",

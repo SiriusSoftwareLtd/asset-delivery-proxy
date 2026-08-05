@@ -276,6 +276,4 @@ Read [`SECURITY.md`](./SECURITY.md) and use GitHub Private Vulnerability Reporti
 
 ## License
 
-A license has not yet been selected for this repository.
-
-Until one is added, do not assume permission to reuse or redistribute the code.
+This repository is licensed under the [Mozilla Public License Version 2.0](./LICENSE).

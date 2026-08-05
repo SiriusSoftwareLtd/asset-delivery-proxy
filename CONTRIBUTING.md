@@ -53,4 +53,4 @@ Please make each pull request easy to review:
 - Include only source, test, and documentation changes that are necessary for the proposal.
 - Be ready to address review feedback or explain intentional trade-offs.
 
-By contributing, you agree to follow the [Code of Conduct](./CODE_OF_CONDUCT.md). Licensing terms for contributions will apply once the repository license is published.
+By contributing, you agree to follow the [Code of Conduct](./CODE_OF_CONDUCT.md). Contributions are licensed under the [Mozilla Public License Version 2.0](./LICENSE).
