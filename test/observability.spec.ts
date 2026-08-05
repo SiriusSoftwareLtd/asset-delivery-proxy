@@ -34,6 +34,19 @@ function request(assetId: string, headers: Record<string, string> = {}) {
 }
 
 describe('observability report levels', () => {
+  test('enters a trace span when reporting is enabled', () => {
+    expect(
+      enterTraceSpan(
+        'test',
+        (span) => {
+          span.setAttribute('test', true);
+          return 'ok';
+        },
+        'info',
+      ),
+    ).toBe('ok');
+  });
+
   test.each([
     [undefined, 'off'],
     [' invalid ', 'off'],

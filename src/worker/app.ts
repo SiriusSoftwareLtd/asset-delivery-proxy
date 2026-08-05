@@ -7,11 +7,12 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { AppEnvironment } from '../http/context';
+import { observeRequests } from '../http/middleware/observeRequests';
+import { rateLimit } from '../http/middleware/rateLimit';
 import { errorResponse } from '../http/responses';
-import { getErrorFields, logEvent, observeRequests } from '../middleware/observability';
-import { rateLimit } from '../middleware/rateLimiter';
-import { registerRoutes } from '../routes';
-import type { AppEnvironment } from '../types/app';
+import { registerRoutes } from '../http/routes/registerRoutes';
+import { getErrorFields, logEvent } from '../observability/logging';
 
 export const app = new Hono<AppEnvironment>();
 

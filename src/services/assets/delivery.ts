@@ -5,10 +5,12 @@
  */
 
 import { HTTPException } from 'hono/http-exception';
-import { enterTraceSpan, getErrorFields, logEvent } from '../../middleware/observability';
-import { limitAssetMiss } from '../../middleware/rateLimiter';
+import { limitAssetMiss } from '../../assets/rateLimit';
+import type { AssetResolutionIdentity, AssetResolutionResult, CacheStatus } from '../../assets/types';
+import type { AppContext } from '../../http/context';
 import { writeAssetMetric } from '../../observability/assetMetrics';
-import type { AppContext, AssetResolutionIdentity, AssetResolutionResult, CacheStatus } from '../../types/app';
+import { getErrorFields, logEvent } from '../../observability/logging';
+import { enterTraceSpan } from '../../observability/tracing';
 import {
   type AssetCacheEntry,
   buildAssetResolutionIdentity,
@@ -101,7 +103,7 @@ function cachedAssetResult(assetId: string, entry: AssetCacheEntry, cacheStatus:
   };
 }
 
-async function resolveDirect(
+export async function resolveDirect(
   c: AppContext,
   identity: AssetResolutionIdentity,
 ): Promise<{ result: AssetResolutionResult; cacheStatus: CacheStatus }> {

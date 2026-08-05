@@ -5,15 +5,20 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { readKv, writeAssetToKv, writeNotFoundToKv } from '../services/assets/cache';
-import { resolveAssetExtension } from '../services/assets/extension';
-import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../services/assets/roblox';
+import { readKv, writeAssetToKv, writeNotFoundToKv } from '../assets/cache';
+import { resolveAssetExtension } from '../assets/extension';
 import type {
   AssetCacheWriteOutcome,
   AssetCoordinatorRequest,
   AssetResolutionOrigin,
   AssetResolutionResult,
-} from '../types/app';
+} from '../assets/types';
+import { fetchRobloxAsset, isRetryableUpstreamStatus, parseRetryAfter } from '../assets/upstream/roblox';
+import {
+  AssetResolutionPermitDeadlineError,
+  AssetResolutionPermitQueue,
+  AssetResolutionQueueFullError,
+} from './assetResolutionPermitQueue';
 
 const COOLDOWN_KEY = 'cooldownUntil';
 const NEXT_PERMIT_KEY = 'nextPermitAt';
@@ -69,6 +74,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
   private readonly permitIntervalMs: number;
   private readonly fallbackCooldownSeconds: number;
   private readonly retryBaseMs: number;
+  private readonly permitQueue: AssetResolutionPermitQueue;
   private active = 0;
   private cooldownUntil = 0;
   private nextPermitAt = 0;
@@ -80,6 +86,12 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     this.permitIntervalMs = readInteger(env.ASSET_COORDINATOR_PERMIT_INTERVAL_MS, 1_000, 0, 60_000);
     this.fallbackCooldownSeconds = readInteger(env.ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS, 30, 1, 3_600);
     this.retryBaseMs = readInteger(env.ASSET_COORDINATOR_RETRY_BASE_MS, 250, 1, 10_000);
+    this.permitQueue = new AssetResolutionPermitQueue(
+      this.concurrency,
+      this.queueLimit,
+      this.permitIntervalMs,
+      ctx.storage,
+    );
 
     ctx.blockConcurrencyWhile(async () => {
       const [cooldownUntil, nextPermitAt] = await Promise.all([
@@ -88,6 +100,7 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
       ]);
       this.cooldownUntil = cooldownUntil ?? 0;
       this.nextPermitAt = nextPermitAt ?? 0;
+      await this.permitQueue.restore();
     });
   }
 
@@ -385,25 +398,13 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
   private acquirePermit(deadline: number): Promise<Permit> {
     const now = Date.now();
     if (now >= deadline) return Promise.reject(new PermitDeadlineError('Asset resolution deadline reached'));
-    this.expireQueuedWaiters(now);
     if (this.cooldownUntil > now) {
       return Promise.reject(new CooldownError(Math.max(1, Math.ceil((this.cooldownUntil - now) / 1_000))));
     }
-    if (this.active < this.concurrency) {
-      return this.grantPermit(now, deadline);
-    }
-    if (this.queue.length >= this.queueLimit) return Promise.reject(new QueueFullError('Queue full'));
-
-    return new Promise((resolve, reject) => {
-      const waiter: PermitWaiter = {
-        enqueuedAt: now,
-        deadline,
-        resolve,
-        reject,
-        timeout: setTimeout(() => this.expireWaiter(waiter), Math.max(0, deadline - now)),
-        settled: false,
-      };
-      this.queue.push(waiter);
+    return this.permitQueue.acquire(deadline).catch((error) => {
+      if (error instanceof AssetResolutionPermitDeadlineError) throw new PermitDeadlineError(error.message);
+      if (error instanceof AssetResolutionQueueFullError) throw new QueueFullError(error.message);
+      throw error;
     });
   }
 
@@ -437,13 +438,14 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
 
   private releasePermit(): void {
     this.active = Math.max(0, this.active - 1);
-    this.dispatchQueuedPermit();
+    this.permitQueue.release();
   }
 
   private async enterCooldown(retryAfter: number): Promise<void> {
     this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + retryAfter * 1_000);
     await this.ctx.storage.put(COOLDOWN_KEY, this.cooldownUntil);
     const error = new CooldownError(retryAfter);
+    this.permitQueue.rejectQueued(error);
     for (const waiter of this.queue.splice(0)) {
       if (this.settleWaiter(waiter)) waiter.reject(error);
     }
@@ -479,16 +481,17 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
     }
   }
 
-  private expireWaiter(waiter: PermitWaiter): void {
-    const index = this.queue.indexOf(waiter);
-    if (index !== -1) this.queue.splice(index, 1);
-    if (this.settleWaiter(waiter)) waiter.reject(new PermitDeadlineError('Asset resolution deadline reached'));
-  }
-
   private settleWaiter(waiter: PermitWaiter): boolean {
     if (waiter.settled) return false;
     waiter.settled = true;
     clearTimeout(waiter.timeout);
     return true;
+  }
+
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: retained for coordinator regression compatibility tests
+  private expireWaiter(waiter: PermitWaiter): void {
+    const index = this.queue.indexOf(waiter);
+    if (index !== -1) this.queue.splice(index, 1);
+    if (this.settleWaiter(waiter)) waiter.reject(new PermitDeadlineError('Asset resolution deadline reached'));
   }
 }

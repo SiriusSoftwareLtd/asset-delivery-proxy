@@ -212,3 +212,14 @@ BREAKING CHANGE: asset batch results now use the new response schema.
 Optional bodies and footers must also follow Conventional Commits 1.0.0.
 
 Do not create commits that omit the Gitmoji or violate the Conventional Commits structure.
+
+## Current modular boundaries
+
+- `src/http/` owns Hono context, middleware, route parsing, and HTTP serialization.
+- `src/assets/` owns asset delivery, identity, caching, batching, upstream resolution, and asset rate limiting.
+- `src/icons/` owns icon configuration, providers, rendering, caching, delivery, and batching.
+- `src/observability/` owns generic logging, tracing, and report-level policy; request middleware lives under `src/http/middleware/`.
+- `src/durable-objects/` owns coordinator lifecycle and the asset-specific permit queue.
+- `src/shared/` and `src/infrastructure/` contain only cross-feature primitives.
+
+Feature modules must not import Hono route handlers. Keep HTTP adaptation at the `src/http/` boundary.

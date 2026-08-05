@@ -6,9 +6,10 @@
 
 import { initWasm, Resvg, type ResvgRenderOptions } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
-import { enterTraceSpan, parseReportLevel } from '../../middleware/observability';
-import { getErrorMessage, isTimeoutError } from '../../utils/errors';
-import { fetchWithTimeout } from '../../utils/fetch';
+import { fetchWithTimeout } from '../../infrastructure/http/fetchWithTimeout';
+import { parseReportLevel } from '../../observability/reportLevel';
+import { enterTraceSpan } from '../../observability/tracing';
+import { getErrorMessage, isTimeoutError } from '../../shared/errors';
 import { readBoundedBody } from './body';
 import { MAX_SVG_BYTES, SVG_PREFIX_BYTES, UPSTREAM_TIMEOUT_MS } from './constants';
 import { IconError } from './errors';
