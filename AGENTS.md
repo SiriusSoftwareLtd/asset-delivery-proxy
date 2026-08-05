@@ -52,7 +52,7 @@ responses. `src/routes/index.ts` registers the public routes.
 
 ## Toolchain and commands
 
-Use Node.js 20 or later and pnpm. Do not substitute npm or yarn, and do not hand-edit `pnpm-lock.yaml`.
+Use Node.js 24 and pnpm. Do not substitute npm or yarn, and do not hand-edit `pnpm-lock.yaml`.
 
 ```sh
 pnpm install

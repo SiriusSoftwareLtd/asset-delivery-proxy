@@ -20,7 +20,7 @@ The service validates asset requests, proxies Roblox asset delivery, applies lay
 
 ## Requirements
 
-- Node.js 20 or later
+- Node.js 24
 - pnpm
 - A Cloudflare account for local remote bindings or deployment
 
