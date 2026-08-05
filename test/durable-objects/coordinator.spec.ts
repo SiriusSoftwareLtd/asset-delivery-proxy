@@ -1,4 +1,5 @@
-import { env, runInDurableObject } from 'cloudflare:test';
+import { runInDurableObject } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { describe, expect, test, vi } from 'vitest';
 import type { AssetCoordinatorRequest, AssetResolutionResult } from '../../src/assets/types';
 import type { Permit } from '../../src/durable-objects/assetResolutionCoordinator';
@@ -22,8 +23,11 @@ type CoordinatorInternals = {
   };
 };
 
+let stubSequence = 0;
+
 function createStub(label: string) {
-  return env.ASSET_RESOLUTION_COORDINATOR.getByName(`${label}-${crypto.randomUUID()}`);
+  stubSequence += 1;
+  return env.ASSET_RESOLUTION_COORDINATOR.getByName(`${label}-${stubSequence}`);
 }
 
 describe('asset resolution coordinator internals', () => {

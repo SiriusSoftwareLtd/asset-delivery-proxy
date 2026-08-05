@@ -2,6 +2,7 @@
   "name": "asset-delivery-proxy",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "license": "MPL-2.0",
   "scripts": {
     "deploy": "wrangler deploy",
@@ -19,13 +20,13 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.5",
-    "@cloudflare/vitest-pool-workers": "^0.12.21",
+    "@cloudflare/vitest-pool-workers": "^0.20.1",
     "@types/node": "^24.13.3",
-    "@vitest/coverage-istanbul": "3.2.7",
+    "@vitest/coverage-istanbul": "4.1.10",
     "cross-env": "^10.1.0",
     "tsx": "^4.23.5",
     "typescript": "^7.0.2",
-    "vitest": "~3.2.0",
+    "vitest": "~4.1.10",
     "wrangler": "^4.114.0"
   },
   "dependencies": {

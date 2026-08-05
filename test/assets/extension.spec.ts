@@ -47,13 +47,15 @@ describe('asset extension detection', () => {
     expect(extensionFromContentType(null)).toBeUndefined();
   });
 
-  test('detects required binary signatures', () => {
-    expect(extensionFromPrefix(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))).toBe('.png');
-    expect(extensionFromPrefix(bytes(0x4f, 0x54, 0x54, 0x4f))).toBe('.otf');
-    expect(extensionFromPrefix(bytes(0x77, 0x4f, 0x46, 0x32))).toBe('.woff2');
-    expect(extensionFromPrefix(bytes(0x49, 0x44, 0x33))).toBe('.mp3');
-    expect(extensionFromPrefix(bytes(0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50))).toBe('.webp');
-    expect(extensionFromPrefix(bytes(0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20))).toBe('.mov');
+  test.each([
+    ['PNG', bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a), '.png'],
+    ['OpenType', bytes(0x4f, 0x54, 0x54, 0x4f), '.otf'],
+    ['WOFF2', bytes(0x77, 0x4f, 0x46, 0x32), '.woff2'],
+    ['ID3 MP3', bytes(0x49, 0x44, 0x33), '.mp3'],
+    ['WebP', bytes(0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50), '.webp'],
+    ['QuickTime', bytes(0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20), '.mov'],
+  ])('detects the %s binary signature', (_name, prefix, expected) => {
+    expect(extensionFromPrefix(prefix)).toBe(expected);
   });
 
   test('uses Roblox serialization and asset type to distinguish model/place formats', () => {
@@ -159,13 +161,15 @@ describe('asset extension detection', () => {
     expect(cancel).toHaveBeenCalledWith('consumer stopped');
   });
 
-  test('detects additional supported font signatures', () => {
-    expect(extensionFromPrefix(createEot())).toBe('.eot');
-    expect(extensionFromPrefix(bytes(0x00, 0x01, 0x00, 0x00))).toBe('.ttf');
-    expect(extensionFromPrefix(new TextEncoder().encode('ttcf'))).toBe('.ttc');
-    expect(extensionFromPrefix(new TextEncoder().encode('wOFF'))).toBe('.woff');
-    expect(extensionFromPrefix(new TextEncoder().encode('true'))).toBe('.ttf');
-    expect(extensionFromPrefix(new TextEncoder().encode('typ1'))).toBe('.otf');
+  test.each([
+    ['EOT', createEot(), '.eot'],
+    ['TrueType', bytes(0x00, 0x01, 0x00, 0x00), '.ttf'],
+    ['TrueType collection', new TextEncoder().encode('ttcf'), '.ttc'],
+    ['WOFF', new TextEncoder().encode('wOFF'), '.woff'],
+    ['TrueType alternate', new TextEncoder().encode('true'), '.ttf'],
+    ['PostScript OpenType', new TextEncoder().encode('typ1'), '.otf'],
+  ])('detects the %s font signature', (_name, prefix, expected) => {
+    expect(extensionFromPrefix(prefix)).toBe(expected);
   });
 
   test('rejects malformed EOT signatures', () => {

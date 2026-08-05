@@ -4,18 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
-import { describe, expect, test, vi } from 'vitest';
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import sourceWorker from '../../src';
 import type { AssetResolutionResult } from '../../src/assets/types';
 import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
 import { fetchAsset } from '../../src/services/assets/delivery';
+import { createInMemoryKv as createCache } from '../helpers/in-memory-kv';
 import worker from '../worker';
 
-type StoredValue = {
-  value: ArrayBuffer;
-  metadata?: unknown;
-};
 type AnalyticsPoint = {
   blobs?: string[];
   doubles?: number[];
@@ -23,32 +21,6 @@ type AnalyticsPoint = {
 };
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
-
-function createCache() {
-  const values = new Map<string, StoredValue>();
-  return {
-    values,
-    async getWithMetadata<T>(key: string) {
-      const stored = values.get(key);
-      return {
-        value: stored?.value ?? null,
-        metadata: (stored?.metadata as T | undefined) ?? null,
-      };
-    },
-    async get(key: string, type?: 'arrayBuffer') {
-      const stored = values.get(key);
-      if (!stored) return null;
-      if (type === 'arrayBuffer') return stored.value;
-      return new TextDecoder().decode(stored.value);
-    },
-    async put(key: string, value: ArrayBuffer, options?: { metadata?: unknown }) {
-      values.set(key, { value, metadata: options?.metadata });
-    },
-    async delete(key: string) {
-      values.delete(key);
-    },
-  };
-}
 
 const ASSET_FEATURE_FLAGS = [
   'use-asset-delivery-v2',
@@ -141,6 +113,10 @@ function batchRequest(body: unknown, headers: Record<string, string> = {}) {
     body: JSON.stringify(body),
   });
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 async function seedStaleAsset(
   cache: KVNamespace,

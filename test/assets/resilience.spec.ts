@@ -4,47 +4,155 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { env } from 'cloudflare:test';
+import { runInDurableObject } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { describe, expect, test, vi } from 'vitest';
+import type { AssetResolutionCoordinator } from '../../src';
 import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
 
 let assetIdSequence = 0;
 
 function uniqueAssetId(): string {
   assetIdSequence += 1;
-  return `${Date.now()}${assetIdSequence.toString().padStart(4, '0')}`;
+  return `900000${assetIdSequence.toString().padStart(4, '0')}`;
 }
 
 describe('asset resilience primitives', () => {
-  test('coalesces 100 simultaneous same-key coordinator requests', async () => {
+  test('coalesces simultaneous same-key coordinator requests', async () => {
+    const callerCount = 16;
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
     const identity = await buildAssetResolutionIdentity(assetId, request, false);
-    await env.assetCache.delete(identity.physicalKey);
+
     const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`coalescing-${assetId}`);
-    let releaseFetch: (() => void) | undefined;
+
+    let releaseFetch!: () => void;
+    let signalFetchStarted!: () => void;
+
     const fetchGate = new Promise<void>((resolve) => {
       releaseFetch = resolve;
     });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-      await fetchGate;
-      return new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } });
+
+    const fetchStarted = new Promise<void>((resolve) => {
+      signalFetchStarted = resolve;
     });
 
-    const calls = Array.from({ length: 100 }, () =>
-      stub.resolve({ identity, deadline: Date.now() + 10_000, backpressure: false }),
-    );
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    releaseFetch?.();
-    const results = await Promise.all(calls);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      signalFetchStarted();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
-    expect(results.filter((result) => result.joined).length).toBeGreaterThan(0);
-    expect(results.filter((result) => !result.joined && result.attempts === 1)).toHaveLength(1);
-    expect(results.filter((result) => result.joined || result.origin === 'kv')).toHaveLength(99);
-    fetchMock.mockRestore();
-    await env.assetCache.delete(identity.physicalKey);
+      await fetchGate;
+
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          'Content-Type': 'image/png',
+        },
+      });
+    });
+
+    try {
+      const results = await runInDurableObject(stub, async (instance: AssetResolutionCoordinator) => {
+        const calls = Array.from({ length: callerCount }, () =>
+          instance.resolve({
+            identity,
+            deadline: Date.now() + 10_000,
+            backpressure: false,
+          }),
+        );
+
+        await fetchStarted;
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        releaseFetch();
+
+        return Promise.all(calls);
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      expect(
+        results.every((result) => result.kind === 'asset' && result.status === 200 && result.origin === 'upstream'),
+      ).toBe(true);
+
+      expect(results.filter((result) => !result.joined)).toHaveLength(1);
+
+      expect(results.filter((result) => result.joined)).toHaveLength(callerCount - 1);
+
+      expect(results.filter((result) => !result.joined && result.attempts === 1)).toHaveLength(1);
+    } finally {
+      fetchMock.mockRestore();
+      releaseFetch();
+    }
+  });
+
+  test('coalesces same-key requests through the Durable Object RPC stub', async () => {
+    const callerCount = 8;
+    const assetId = uniqueAssetId();
+
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`rpc-coalescing-${assetId}`);
+
+    let releaseFetch!: () => void;
+    let signalFetchStarted!: () => void;
+
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+
+    const fetchStarted = new Promise<void>((resolve) => {
+      signalFetchStarted = resolve;
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      signalFetchStarted();
+
+      await fetchGate;
+
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          'Content-Type': 'image/png',
+        },
+      });
+    });
+
+    try {
+      const calls = Array.from({ length: callerCount }, () =>
+        stub.resolve({
+          identity,
+          deadline: Date.now() + 10_000,
+          backpressure: false,
+        }),
+      );
+
+      await fetchStarted;
+
+      // The first RPC should already be resolving upstream while the
+      // remaining same-key requests are queued/joining it.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      releaseFetch();
+
+      const results = await Promise.all(calls);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
+
+      expect(results.filter((result) => result.joined).length).toBeGreaterThan(0);
+
+      expect(
+        results.filter((result) => result.joined || (result.kind === 'asset' && result.origin === 'kv')),
+      ).toHaveLength(callerCount - 1);
+
+      expect(
+        results.filter((result) => !result.joined && result.kind === 'asset' && result.origin === 'upstream'),
+      ).toHaveLength(1);
+    } finally {
+      fetchMock.mockRestore();
+      releaseFetch();
+    }
   });
 
   test('persists a 429 cooldown and suppresses the next cold resolution', async () => {
