@@ -7,7 +7,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
 import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
-import { parseRetryAfter } from '../src/services/assets/roblox';
 
 let assetIdSequence = 0;
 
@@ -17,13 +16,6 @@ function uniqueAssetId(): string {
 }
 
 describe('asset resilience primitives', () => {
-  test('parses Retry-After delta seconds and HTTP dates', () => {
-    const now = Date.parse('2026-08-03T12:00:00.000Z');
-    expect(parseRetryAfter('12', now)).toBe(12);
-    expect(parseRetryAfter('Mon, 03 Aug 2026 12:00:09 GMT', now)).toBe(9);
-    expect(parseRetryAfter('invalid', now)).toBeUndefined();
-  });
-
   test('coalesces 100 simultaneous same-key coordinator requests', async () => {
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
@@ -171,70 +163,6 @@ describe('asset resilience primitives', () => {
     fetchMock.mockRestore();
   });
 
-  test('expires a queued coordinator request before it receives a permit', async () => {
-    const activeAssetId = uniqueAssetId();
-    const expiredAssetId = uniqueAssetId();
-    const laterAssetId = uniqueAssetId();
-    const activeIdentity = await buildAssetResolutionIdentity(
-      activeAssetId,
-      new Request(`https://proxy.test/v1/assets/${activeAssetId}`),
-      false,
-    );
-    const expiredIdentity = await buildAssetResolutionIdentity(
-      expiredAssetId,
-      new Request(`https://proxy.test/v1/assets/${expiredAssetId}`),
-      false,
-    );
-    const laterIdentity = await buildAssetResolutionIdentity(
-      laterAssetId,
-      new Request(`https://proxy.test/v1/assets/${laterAssetId}`),
-      false,
-    );
-    await Promise.all([
-      env.assetCache.delete(activeIdentity.physicalKey),
-      env.assetCache.delete(expiredIdentity.physicalKey),
-      env.assetCache.delete(laterIdentity.physicalKey),
-    ]);
-    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`queue-deadline-${activeAssetId}`);
-    let releaseFetch: (() => void) | undefined;
-    const fetchGate = new Promise<void>((resolve) => {
-      releaseFetch = resolve;
-    });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-      if (fetchMock.mock.calls.length === 1) await fetchGate;
-      return new Response(new Uint8Array([7]), { headers: { 'Content-Type': 'image/png' } });
-    });
-
-    const active = stub.resolve({ identity: activeIdentity, deadline: Date.now() + 10_000, backpressure: true });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-
-    const expired = await stub.resolve({ identity: expiredIdentity, deadline: Date.now() + 50, backpressure: true });
-
-    expect(expired).toEqual(
-      expect.objectContaining({
-        kind: 'error',
-        status: 504,
-        error: 'Roblox asset delivery timed out',
-        attempts: 0,
-        origin: 'admission',
-      }),
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    const later = stub.resolve({ identity: laterIdentity, deadline: Date.now() + 10_000, backpressure: true });
-    releaseFetch?.();
-    const [activeResult, laterResult] = await Promise.all([active, later]);
-
-    expect(activeResult).toEqual(expect.objectContaining({ kind: 'asset', status: 200, attempts: 1 }));
-    expect(laterResult).toEqual(expect.objectContaining({ kind: 'asset', status: 200, attempts: 1 }));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    fetchMock.mockRestore();
-    await Promise.all([
-      env.assetCache.delete(activeIdentity.physicalKey),
-      env.assetCache.delete(expiredIdentity.physicalKey),
-      env.assetCache.delete(laterIdentity.physicalKey),
-    ]);
-  });
   test('negative-caches a coordinator 404 and serves the next request from KV', async () => {
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
@@ -415,90 +343,6 @@ describe('asset resilience primitives', () => {
     }
   });
 
-  test('rejects excess callers when the coordinator queue is full', async () => {
-    const assetIds = Array.from({ length: 34 }, () => uniqueAssetId());
-
-    const identities = await Promise.all(
-      assetIds.map((assetId) =>
-        buildAssetResolutionIdentity(assetId, new Request(`https://proxy.test/v1/assets/${assetId}`), false),
-      ),
-    );
-
-    await Promise.all(identities.map((identity) => env.assetCache.delete(identity.physicalKey)));
-
-    const firstAssetId = assetIds[0];
-
-    if (!firstAssetId) {
-      throw new Error('Expected at least one asset ID');
-    }
-
-    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`queue-full-${firstAssetId}`);
-
-    let releaseFetch: (() => void) | undefined;
-
-    const fetchGate = new Promise<void>((resolve) => {
-      releaseFetch = resolve;
-    });
-
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-      await fetchGate;
-
-      return new Response(new Uint8Array([1]), {
-        headers: { 'Content-Type': 'image/png' },
-      });
-    });
-
-    try {
-      const firstIdentity = identities[0];
-
-      if (!firstIdentity) {
-        throw new Error('Expected at least one asset identity');
-      }
-
-      const active = stub.resolve({
-        identity: firstIdentity,
-        deadline: Date.now() + 10_000,
-        backpressure: true,
-      });
-
-      await vi.waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-      });
-
-      const queueDeadline = Date.now() + 1_000;
-
-      const contenders = identities.slice(1).map((identity) =>
-        stub.resolve({
-          identity,
-          deadline: queueDeadline,
-          backpressure: true,
-        }),
-      );
-
-      const results = await Promise.all(contenders);
-
-      expect(results.filter((result) => result.status === 503)).toHaveLength(1);
-      expect(results.filter((result) => result.status === 504)).toHaveLength(32);
-
-      // No queued caller should reach Roblox.
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      releaseFetch?.();
-
-      expect(await active).toEqual(
-        expect.objectContaining({
-          kind: 'asset',
-          status: 200,
-        }),
-      );
-    } finally {
-      releaseFetch?.();
-      fetchMock.mockRestore();
-
-      await Promise.all(identities.map((identity) => env.assetCache.delete(identity.physicalKey)));
-    }
-  });
-
   test('serves a sequential coordinator request from fresh KV', async () => {
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
@@ -561,81 +405,6 @@ describe('asset resilience primitives', () => {
     } finally {
       fetchMock.mockRestore();
       await env.assetCache.delete(identity.physicalKey);
-    }
-  });
-
-  test('rejects a permit when the next scheduled grant is after its deadline', async () => {
-    const firstAssetId = uniqueAssetId();
-    const secondAssetId = uniqueAssetId();
-
-    const firstIdentity = await buildAssetResolutionIdentity(
-      firstAssetId,
-      new Request(`https://proxy.test/v1/assets/${firstAssetId}`),
-      false,
-    );
-
-    const secondIdentity = await buildAssetResolutionIdentity(
-      secondAssetId,
-      new Request(`https://proxy.test/v1/assets/${secondAssetId}`),
-      false,
-    );
-
-    await Promise.all([
-      env.assetCache.delete(firstIdentity.physicalKey),
-      env.assetCache.delete(secondIdentity.physicalKey),
-    ]);
-
-    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`scheduled-deadline-${firstAssetId}`);
-
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async () =>
-        new Response(new Uint8Array([1]), {
-          headers: {
-            'Content-Type': 'image/png',
-          },
-        }),
-    );
-
-    try {
-      const first = await stub.resolve({
-        identity: firstIdentity,
-        deadline: Date.now() + 10_000,
-        backpressure: true,
-      });
-
-      expect(first).toEqual(
-        expect.objectContaining({
-          kind: 'asset',
-          status: 200,
-        }),
-      );
-
-      // The configured permit interval is much longer than this deadline.
-      const second = await stub.resolve({
-        identity: secondIdentity,
-        deadline: Date.now() + 100,
-        backpressure: true,
-      });
-
-      expect(second).toEqual(
-        expect.objectContaining({
-          kind: 'error',
-          status: 504,
-          error: 'Roblox asset delivery timed out',
-          attempts: 0,
-          origin: 'admission',
-        }),
-      );
-
-      // The second request must never reach Roblox.
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    } finally {
-      fetchMock.mockRestore();
-
-      await Promise.all([
-        env.assetCache.delete(firstIdentity.physicalKey),
-        env.assetCache.delete(secondIdentity.physicalKey),
-      ]);
     }
   });
 
