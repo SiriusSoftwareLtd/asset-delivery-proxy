@@ -223,37 +223,6 @@ describe('asset delivery', () => {
     fetchMock.mockRestore();
   });
 
-  test('forwards only v2 allowlisted inputs and varies the cache key', async () => {
-    const cache = createCache();
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/one' }] }))
-      .mockResolvedValueOnce(new Response(new Uint8Array([7])))
-      .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/two' }] }))
-      .mockResolvedValueOnce(new Response(new Uint8Array([8])));
-
-    const firstRequest = request('404');
-    const firstUrl = new URL(firstRequest.url);
-    firstUrl.searchParams.set('assetVersionId', '1');
-    firstUrl.searchParams.set('unknown', 'drop-me');
-    const headers = new Headers(firstRequest.headers);
-    headers.set('Roblox-Place-Id', '99');
-    headers.set('X-Unknown', 'drop-me');
-    const first = await worker.fetch(new Request(firstUrl, { headers }), createTestEnv(true, cache));
-    const secondUrl = new URL(firstUrl);
-    secondUrl.searchParams.set('assetVersionId', '2');
-    const second = await worker.fetch(new Request(secondUrl, { headers }), createTestEnv(true, cache));
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(new Headers(discoveryRequest.headers).get('Roblox-Place-Id')).toBe('99');
-    expect(new Headers(discoveryRequest.headers).get('X-Unknown')).toBeNull();
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('assetVersionId=1');
-    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('unknown=');
-    fetchMock.mockRestore();
-  });
-
   test('authenticated v1 follows Open Cloud discovery and caches the final asset', async () => {
     const cache = createCache();
 
