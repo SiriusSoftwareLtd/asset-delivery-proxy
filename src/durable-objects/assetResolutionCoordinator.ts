@@ -346,7 +346,8 @@ export class AssetResolutionCoordinator extends DurableObject<CloudflareBindings
       }
     }
 
-    return this.errorResult(502, 'Unable to reach Roblox asset delivery', 2, queueTimeMs, 'upstream');
+    // impossible to reach here
+    return Promise.reject(new Error('Unexpected error'));
   }
 
   private errorResult(
