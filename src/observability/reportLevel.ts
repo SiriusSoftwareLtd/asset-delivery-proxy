@@ -10,10 +10,16 @@ export type ReportLevelSource = string | { OBSERVABILITY_REPORT_LEVEL?: string }
 
 const PRIORITY: Record<ReportLevel, number> = { off: 0, error: 1, warn: 2, info: 3, debug: 4 };
 
+function isReportLevel(value: string): value is ReportLevel {
+  return Object.hasOwn(PRIORITY, value);
+}
+
 export function parseReportLevel(value: unknown): ReportLevel {
   if (typeof value !== 'string') return 'off';
+
   const normalized = value.trim().toLowerCase();
-  return normalized in PRIORITY ? (normalized as ReportLevel) : 'off';
+
+  return isReportLevel(normalized) ? normalized : 'off';
 }
 
 export function reportLevel(source: ReportLevelSource): ReportLevel {

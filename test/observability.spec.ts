@@ -83,6 +83,8 @@ describe('observability report levels', () => {
   test.each([
     [undefined, 'off'],
     [' invalid ', 'off'],
+    ['constructor', 'off'],
+    ['__proto__', 'off'],
     [' WARN ', 'warn'],
   ])('parses %j as %s', (value, expected) => {
     expect(parseReportLevel(value)).toBe(expected);
