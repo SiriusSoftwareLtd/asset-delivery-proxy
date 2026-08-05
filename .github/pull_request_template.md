@@ -9,6 +9,6 @@
 ## Checklist
 
 - [ ] I kept the change focused and updated relevant tests.
-- [ ] I ran `pnpm test`.
+- [ ] I ran `pnpm coverage`.
 - [ ] I updated documentation where public behavior or configuration changed.
 - [ ] I did not commit secrets, tokens, or private configuration.
