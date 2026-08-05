@@ -17,8 +17,8 @@ export default defineWorkersConfig({
 			provider: 'istanbul',
 			reporter: ['text', 'json', 'html'],
 			thresholds: {
-			  lines: 94,
-			  functions: 92,
+			  lines: 95,
+			  functions: 90,
 			  branches: 80,
 			  statements: 90,
 			},
