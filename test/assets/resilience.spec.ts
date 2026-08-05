@@ -85,6 +85,69 @@ describe('asset resilience primitives', () => {
     }
   });
 
+  test('coalesces same-key requests through the Durable Object RPC stub', async () => {
+    const callerCount = 8;
+    const assetId = uniqueAssetId();
+
+    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
+    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+
+    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`rpc-coalescing-${assetId}`);
+
+    let releaseFetch!: () => void;
+    let signalFetchStarted!: () => void;
+
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+
+    const fetchStarted = new Promise<void>((resolve) => {
+      signalFetchStarted = resolve;
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      signalFetchStarted();
+
+      await fetchGate;
+
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          'Content-Type': 'image/png',
+        },
+      });
+    });
+
+    try {
+      const calls = Array.from({ length: callerCount }, () =>
+        stub.resolve({
+          identity,
+          deadline: Date.now() + 10_000,
+          backpressure: false,
+        }),
+      );
+
+      await fetchStarted;
+
+      // The first RPC should already be resolving upstream while the
+      // remaining same-key requests are queued/joining it.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      releaseFetch();
+
+      const results = await Promise.all(calls);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      expect(results.every((result) => result.kind === 'asset' && result.status === 200)).toBe(true);
+
+      expect(results.filter((result) => !result.joined)).toHaveLength(1);
+      expect(results.filter((result) => result.joined)).toHaveLength(callerCount - 1);
+    } finally {
+      fetchMock.mockRestore();
+      releaseFetch();
+    }
+  });
+
   test('persists a 429 cooldown and suppresses the next cold resolution', async () => {
     const assetId = uniqueAssetId();
     const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
