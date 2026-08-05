@@ -5,6 +5,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [
     cloudflareTest({
+      remoteBindings: false,
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
         bindings: {
