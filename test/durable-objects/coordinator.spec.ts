@@ -1,4 +1,5 @@
-import { env, runInDurableObject } from 'cloudflare:test';
+import { runInDurableObject } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { describe, expect, test, vi } from 'vitest';
 import type { AssetCoordinatorRequest, AssetResolutionResult } from '../../src/assets/types';
 import type { Permit } from '../../src/durable-objects/assetResolutionCoordinator';

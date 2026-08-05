@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { AppContext } from '../../src/http/context';
 

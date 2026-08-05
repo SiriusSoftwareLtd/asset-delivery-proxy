@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { env } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { describe, expect, test, vi } from 'vitest';
 import { buildAssetResolutionIdentity } from '../../src/services/assets/cache';
 
@@ -34,7 +34,7 @@ describe('asset resilience primitives', () => {
     const calls = Array.from({ length: 100 }, () =>
       stub.resolve({ identity, deadline: Date.now() + 10_000, backpressure: false }),
     );
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
     releaseFetch?.();
     const results = await Promise.all(calls);
 

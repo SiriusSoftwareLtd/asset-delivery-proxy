@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { env } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MAX_PNG_BYTES } from '../../src/services/icons/constants';
 import { createInMemoryKv as createCache } from '../helpers/in-memory-kv';

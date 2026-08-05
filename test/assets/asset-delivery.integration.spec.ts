@@ -4,7 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import sourceWorker from '../../src';
 import type { AssetResolutionResult } from '../../src/assets/types';
