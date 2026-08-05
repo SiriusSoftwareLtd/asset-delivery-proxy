@@ -132,68 +132,82 @@ describe('asset resolution coordinator internals', () => {
     });
   });
 
-  test('ignores a response-body cancellation failure on upstream 429', async () => {
-    const assetId = `7${Date.now()}`;
+  test.each([
+    {
+      name: 'the fallback error message',
+      statusText: '',
+      expectedError: 'Too Many Requests',
+    },
+    {
+      name: 'the upstream status text',
+      statusText: 'Rate Limited',
+      expectedError: 'Rate Limited',
+    },
+  ])(
+    'ignores a response-body cancellation failure on upstream 429 and uses $name',
+    async ({ statusText, expectedError }) => {
+      const assetId = `${statusText ? '7' : '6'}${Date.now()}`;
 
-    const identity = await buildAssetResolutionIdentity(
-      assetId,
-      new Request(`https://proxy.test/v1/assets/${assetId}`),
-      false,
-    );
+      const identity = await buildAssetResolutionIdentity(
+        assetId,
+        new Request(`https://proxy.test/v1/assets/${assetId}`),
+        false,
+      );
 
-    await env.assetCache.delete(identity.physicalKey);
-
-    const stub = createStub('cancel-failure');
-
-    try {
-      await runInDurableObject(stub, async (instance) => {
-        const coordinator = instance as unknown as CoordinatorInternals;
-
-        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-
-        const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-          const response = new Response(new Uint8Array([1]), {
-            status: 429,
-            statusText: 'Rate Limited',
-            headers: {
-              'Retry-After': '5',
-            },
-          });
-
-          // Locking the body causes response.body.cancel() to reject.
-          reader = response.body?.getReader();
-
-          return response;
-        });
-
-        try {
-          const result = await coordinator.resolveUncoalesced({
-            identity,
-            deadline: Date.now() + 10_000,
-            backpressure: false,
-          });
-
-          expect(result).toEqual(
-            expect.objectContaining({
-              kind: 'error',
-              status: 429,
-              error: 'Rate Limited',
-              retryAfter: 5,
-              attempts: 1,
-              origin: 'upstream',
-            }),
-          );
-
-          expect(fetchMock).toHaveBeenCalledTimes(1);
-        } finally {
-          reader?.releaseLock();
-          fetchMock.mockRestore();
-        }
-      });
-    } finally {
       await env.assetCache.delete(identity.physicalKey);
-    }
-  });
+
+      const stub = createStub('cancel-failure');
+
+      try {
+        await runInDurableObject(stub, async (instance) => {
+          const coordinator = instance as unknown as CoordinatorInternals;
+
+          let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+          const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+            const response = new Response(new Uint8Array([1]), {
+              status: 429,
+              statusText,
+              headers: {
+                'Retry-After': '5',
+              },
+            });
+
+            // Locking the body causes response.body.cancel() to reject.
+            reader = response.body?.getReader();
+
+            return response;
+          });
+
+          try {
+            const result = await coordinator.resolveUncoalesced({
+              identity,
+              deadline: Date.now() + 10_000,
+              backpressure: false,
+            });
+
+            expect(result).toEqual(
+              expect.objectContaining({
+                kind: 'error',
+                status: 429,
+                error: expectedError,
+                retryAfter: 5,
+                attempts: 1,
+                origin: 'upstream',
+              }),
+            );
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+          } finally {
+            reader?.releaseLock();
+            fetchMock.mockRestore();
+          }
+        });
+      } finally {
+        await env.assetCache.delete(identity.physicalKey);
+      }
+    },
+  );
 
   test('returns a timeout when the deadline expires immediately after permit admission', async () => {
     const assetId = `6${Date.now()}`;

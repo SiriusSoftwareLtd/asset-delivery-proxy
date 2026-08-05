@@ -306,42 +306,63 @@ describe('asset resilience primitives', () => {
     }
   });
 
-  test('does not retry a retryable status when backpressure is disabled', async () => {
-    const assetId = uniqueAssetId();
-    const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
-    const identity = await buildAssetResolutionIdentity(assetId, request, false);
+  test.each([
+    {
+      name: 'the fallback error message',
+      statusText: '',
+      expectedError: 'Roblox asset delivery failed',
+    },
+    {
+      name: 'the upstream status text',
+      statusText: 'Service Unavailable',
+      expectedError: 'Service Unavailable',
+    },
+  ])(
+    'does not retry a retryable status when backpressure is disabled and uses $name',
+    async ({ statusText, expectedError }) => {
+      const assetId = uniqueAssetId();
 
-    await env.assetCache.delete(identity.physicalKey);
+      const request = new Request(`https://proxy.test/v1/assets/${assetId}`);
 
-    const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`no-retry-${assetId}`);
+      const identity = await buildAssetResolutionIdentity(assetId, request, false);
 
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(async () => new Response('unavailable', { status: 503 }));
+      await env.assetCache.delete(identity.physicalKey);
 
-    try {
-      const result = await stub.resolve({
-        identity,
-        deadline: Date.now() + 10_000,
-        backpressure: false,
-      });
+      const stub = env.ASSET_RESOLUTION_COORDINATOR.getByName(`no-retry-${assetId}`);
 
-      expect(result).toEqual(
-        expect.objectContaining({
-          kind: 'error',
-          status: 503,
-          upstreamStatus: 503,
-          attempts: 1,
-          origin: 'upstream',
-        }),
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        async () =>
+          new Response('unavailable', {
+            status: 503,
+            statusText,
+          }),
       );
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    } finally {
-      fetchMock.mockRestore();
-      await env.assetCache.delete(identity.physicalKey);
-    }
-  });
+      try {
+        const result = await stub.resolve({
+          identity,
+          deadline: Date.now() + 10_000,
+          backpressure: false,
+        });
+
+        expect(result).toEqual(
+          expect.objectContaining({
+            kind: 'error',
+            status: 503,
+            error: expectedError,
+            upstreamStatus: 503,
+            attempts: 1,
+            origin: 'upstream',
+          }),
+        );
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally {
+        fetchMock.mockRestore();
+        await env.assetCache.delete(identity.physicalKey);
+      }
+    },
+  );
 
   test('serves a sequential coordinator request from fresh KV', async () => {
     const assetId = uniqueAssetId();
