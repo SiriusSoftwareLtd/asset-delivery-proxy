@@ -357,9 +357,7 @@ function scheduleStaleRefresh(
   );
   staleRefreshes.set(identity.canonicalKey, refresh);
   refresh.finally(() => {
-    if (staleRefreshes.get(identity.canonicalKey) === refresh) {
-      staleRefreshes.delete(identity.canonicalKey);
-    }
+    staleRefreshes.delete(identity.canonicalKey);
   });
   return refresh;
 }
