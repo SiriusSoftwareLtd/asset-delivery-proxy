@@ -8,21 +8,21 @@ export default defineWorkersConfig({
         miniflare: {
           bindings: {
             ROBLOX_API_KEY: '',
-						ENVIRONMENT: 'test',
+            ENVIRONMENT: 'test',
           },
-        }
-			},
-		},
-		coverage: {
-			provider: 'istanbul',
-			reporter: ['text', 'json', 'html'],
-			thresholds: {
-		    lines: 70,
-		    functions: 70,
-		    branches: 70,
-		    statements: 70,
-			},
-			exclude: ["scripts/verify-production.ts", "test/worker.ts"]
-		}
+        },
+      },
+    },
+    coverage: {
+      provider: 'istanbul',
+      reporter: ['text', 'json', 'html'],
+      thresholds: {
+        lines: 70,
+        functions: 70,
+        branches: 70,
+        statements: 70,
+      },
+      exclude: ['scripts/verify-production.ts', 'test/worker.ts'],
+    },
   },
 });

@@ -1,14 +1,14 @@
 {
-	"assets": [
-		{
-			"id": "YOUR_IMAGE_ASSET_ID",
-			"kind": "image",
-			"name": "Production verification image"
-		},
-		{
-			"id": "YOUR_FONT_ASSET_ID",
-			"kind": "font",
-			"name": "Production verification font"
-		}
-	]
+  "assets": [
+    {
+      "id": "YOUR_IMAGE_ASSET_ID",
+      "kind": "image",
+      "name": "Production verification image"
+    },
+    {
+      "id": "YOUR_FONT_ASSET_ID",
+      "kind": "font",
+      "name": "Production verification font"
+    }
+  ]
 }
