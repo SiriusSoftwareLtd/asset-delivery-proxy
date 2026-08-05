@@ -7,6 +7,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
 import { describe, expect, test, vi } from 'vitest';
 import sourceWorker from '../src';
+import { fetchAsset } from '../src/assets/delivery';
 import { buildAssetResolutionIdentity } from '../src/services/assets/cache';
 import type { AssetResolutionResult } from '../src/types/app';
 import worker from './worker';
@@ -1617,6 +1618,149 @@ describe('asset delivery', () => {
     } finally {
       fetchMock.mockRestore();
       l1PutMock.mockRestore();
+    }
+  });
+
+  test('skips a stale refresh when the global refresh capacity is exhausted', async () => {
+    const now = Date.now();
+    const staleValue = new Uint8Array([3]).buffer;
+
+    const cache = {
+      getWithMetadata: vi.fn(async () => ({
+        value: staleValue.slice(0),
+        metadata: {
+          kind: 'asset',
+          version: 2,
+          timestamp: now - 25 * 60 * 60 * 1_000,
+          storedAt: now - 25 * 60 * 60 * 1_000,
+          freshUntil: now - 60 * 60 * 1_000,
+          staleUntil: now + 6 * 24 * 60 * 60 * 1_000,
+          contentType: 'image/png',
+          extension: '.png',
+        },
+      })),
+      delete: vi.fn(async () => undefined),
+    } as unknown as KVNamespace;
+
+    let releaseRefresh: (() => void) | undefined;
+
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+
+    const coordinatorResolve = vi.fn(async (): Promise<AssetResolutionResult> => {
+      await refreshGate;
+
+      return {
+        kind: 'asset',
+        status: 200,
+        data: new Uint8Array([4]),
+        contentType: 'image/png',
+        extension: '.png',
+        timestamp: Date.now(),
+        upstreamStatus: 200,
+        attempts: 1,
+        queueTimeMs: 0,
+        joined: false,
+        origin: 'upstream',
+        cacheWrite: 'written',
+      };
+    });
+
+    const testEnv = {
+      ...createTestEnv(false, cache, {
+        enabledFlags: ['asset-cache-layered', 'asset-upstream-coordinator'],
+      }),
+      OBSERVABILITY_REPORT_LEVEL: 'warn',
+      ASSET_RESOLUTION_COORDINATOR: {
+        getByName: () => ({
+          resolve: coordinatorResolve,
+        }),
+      } as unknown as CloudflareBindings['ASSET_RESOLUTION_COORDINATOR'],
+    } as unknown as CloudflareBindings;
+
+    const executionCtx = createExecutionContext();
+
+    const context = {
+      env: testEnv,
+      executionCtx,
+      get: (key: string) => {
+        if (key === 'requestId') return 'stale-refresh-capacity-test';
+        if (key === 'assetLazyLimitEnabled') return false;
+        return undefined;
+      },
+    } as unknown as Parameters<typeof fetchAsset>[1];
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const createIdentity = (index: number): NonNullable<Parameters<typeof fetchAsset>[3]> => {
+      const assetId = String(8_000_000 + index);
+
+      return {
+        assetId,
+        canonicalKey: `v1|capacity-${index}`,
+        physicalKey: `capacity-${index}`,
+        shardKey: `capacity-${index}`,
+        protocol: 'v1',
+        upstreamUrl: `https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`,
+        upstreamHeaders: {},
+      };
+    };
+
+    try {
+      // Fill every stale-refresh slot with a unique unresolved refresh.
+      for (let index = 0; index < 1_024; index += 1) {
+        const identity = createIdentity(index);
+
+        const result = await fetchAsset(identity.assetId, context, request(identity.assetId), identity);
+
+        if (index === 0) {
+          expect(result).toEqual(
+            expect.objectContaining({
+              kind: 'asset',
+              status: 200,
+              cacheStatus: 'stale-hit',
+            }),
+          );
+        }
+      }
+
+      expect(coordinatorResolve).toHaveBeenCalledTimes(1_024);
+
+      // This key is not already in the single-flight map, so it reaches
+      // the global capacity check.
+      const overflowIdentity = createIdentity(1_024);
+
+      const overflow = await fetchAsset(
+        overflowIdentity.assetId,
+        context,
+        request(overflowIdentity.assetId),
+        overflowIdentity,
+      );
+
+      expect(overflow).toEqual(
+        expect.objectContaining({
+          kind: 'asset',
+          status: 200,
+          cacheStatus: 'stale-hit',
+        }),
+      );
+
+      // Capacity exhaustion must not start another background resolution.
+      expect(coordinatorResolve).toHaveBeenCalledTimes(1_024);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'asset.cache.stale_refresh_capacity_exceeded',
+          requestId: 'stale-refresh-capacity-test',
+        }),
+      );
+    } finally {
+      releaseRefresh?.();
+
+      await waitOnExecutionContext(executionCtx);
+
+      warn.mockRestore();
     }
   });
 });
