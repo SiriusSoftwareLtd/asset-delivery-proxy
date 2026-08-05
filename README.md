@@ -52,13 +52,13 @@ Use resources from your own Cloudflare account when testing a fork or separate d
 
 The Worker exposes endpoints for single and batch Roblox asset delivery, icon rendering, and health checks.
 
-| Method | Endpoint                     | Description                              |
-| ------ | ---------------------------- | ---------------------------------------- |
-| `GET`  | `/health`                    | Check Worker health.                     |
-| `GET`  | `/assets/:assetId`           | Fetch a single Roblox asset.             |
-| `POST` | `/assets/batch`              | Fetch an ordered batch of Roblox assets. |
-| `GET`  | `/icons/:iconPack/:iconName` | Fetch a single icon as PNG.              |
-| `POST` | `/icon/batch`                | Fetch an ordered batch of icons.         |
+| Method | Endpoint                        | Description                              |
+| ------ | ------------------------------- | ---------------------------------------- |
+| `GET`  | `/health`                       | Check Worker health.                     |
+| `GET`  | `/v1/assets/:assetId`           | Fetch a single Roblox asset.             |
+| `POST` | `/v1/assets/batch`              | Fetch an ordered batch of Roblox assets. |
+| `GET`  | `/v1/icons/:iconPack/:iconName` | Fetch a single icon as PNG.              |
+| `POST` | `/v1/icons/batch`               | Fetch an ordered batch of icons.         |
 
 Asset delivery requests require secure mode:
 
