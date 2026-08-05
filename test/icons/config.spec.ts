@@ -112,4 +112,16 @@ describe('icon configuration parsing', () => {
       style: 'solid',
     });
   });
+
+  test('rejects a non-integer output size string', () => {
+    expect(() =>
+      parseIconConfig(
+        'lucide',
+        'check',
+        new URLSearchParams({
+          size: '64px',
+        }),
+      ),
+    ).toThrow('size must be an integer');
+  });
 });

@@ -209,4 +209,40 @@ describe('icon generator', () => {
       fetchMock.mockRestore();
     }
   });
+
+  test('rejects a successful response that does not contain SVG data', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html>not an icon</html>', {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+      }),
+    );
+
+    try {
+      let thrown: unknown;
+
+      try {
+        await getPngFromSvgIcon({
+          iconType: 'lucide',
+          iconName: 'check',
+          outputSize: 64,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(IconError);
+      expect(thrown).toEqual(
+        expect.objectContaining({
+          code: 'INVALID_SVG',
+          stage: 'upstream',
+          retryable: false,
+        }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
 });
