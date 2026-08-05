@@ -565,39 +565,77 @@ describe('asset delivery', () => {
     fetchMock.mockRestore();
   });
 
-  test('preserves upstream status text for a direct batch error', async () => {
+  test.each([
+    {
+      assetId: '7202',
+      statusText: '',
+      expectedError: 'Roblox asset delivery failed',
+    },
+    {
+      assetId: '7203',
+      statusText: 'Service Unavailable',
+      expectedError: 'Service Unavailable',
+    },
+  ])(
+    'uses the expected direct batch error when statusText is "$statusText"',
+    async ({ assetId, statusText, expectedError }) => {
+      const cache = createCache();
+
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response('unavailable', {
+          status: 503,
+          statusText,
+        }),
+      );
+
+      try {
+        const response = await worker.fetch(
+          batchRequest({
+            assetIds: [assetId],
+          }),
+          createTestEnv(false, cache),
+        );
+
+        const body = (await response.json()) as {
+          results: Array<{
+            status: number;
+            error?: string;
+          }>;
+        };
+
+        expect(response.status).toBe(200);
+
+        expect(body.results).toEqual([
+          expect.objectContaining({
+            status: 503,
+            error: expectedError,
+          }),
+        ]);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(cache.values.size).toBe(0);
+      } finally {
+        fetchMock.mockRestore();
+      }
+    },
+  );
+
+  test('rejects an empty successful direct upstream asset', async () => {
     const cache = createCache();
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('unavailable', {
-        status: 503,
-        statusText: 'Service Unavailable',
+      new Response(null, {
+        status: 200,
+        headers: {
+          'Content-Type': 'image/png',
+        },
       }),
     );
 
     try {
-      const response = await worker.fetch(
-        batchRequest({
-          assetIds: ['7202'],
-        }),
-        createTestEnv(false, cache),
-      );
+      const response = await worker.fetch(request('7204'), createTestEnv(false, cache));
 
-      const body = (await response.json()) as {
-        results: Array<{
-          status: number;
-          error?: string;
-        }>;
-      };
-
-      expect(response.status).toBe(200);
-      expect(body.results).toEqual([
-        expect.objectContaining({
-          status: 503,
-          error: 'Service Unavailable',
-        }),
-      ]);
-
+      expect(response.status).toBe(502);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(cache.values.size).toBe(0);
     } finally {
@@ -837,7 +875,7 @@ describe('asset delivery', () => {
     }
   });
 
-  test('reports joined coordinator resolutions without an upstream status', async () => {
+  test('reports retried joined coordinator resolutions without an upstream status', async () => {
     const metricWrites: AnalyticsPoint[] = [];
 
     const testEnv = {
@@ -854,7 +892,7 @@ describe('asset delivery', () => {
         contentType: 'image/png',
         extension: '.png',
         timestamp: Date.now(),
-        attempts: 1,
+        attempts: 2,
         queueTimeMs: 4,
         joined: true,
         origin: 'upstream',
@@ -872,6 +910,7 @@ describe('asset delivery', () => {
 
     expect(metric?.blobs?.[0]).toBe('coordinator-joined');
     expect(metric?.blobs?.[3]).toBe('none');
+    expect(metric?.blobs?.[4]).toBe('retried');
     expect(metric?.doubles?.[3]).toBe(1);
   });
 
