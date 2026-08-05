@@ -57,7 +57,7 @@ describe('asset extension detection', () => {
   });
 
   test('uses Roblox serialization and asset type to distinguish model/place formats', () => {
-    expect(extensionFromPrefix(new TextEncoder().encode('  \ufeff<roblox'), 9)).toBe('.rbxlx');
+    expect(extensionFromPrefix(new TextEncoder().encode('  \ufeff \t\r\n<roblox'), 9)).toBe('.rbxlx');
     expect(extensionFromPrefix(new TextEncoder().encode('<roblox!'), 8)).toBe('.rbxm');
     expect(extensionFromPrefix(new TextEncoder().encode('version 1.00'))).toBe('.mesh');
   });
