@@ -155,4 +155,24 @@ describe('icon configuration parsing', () => {
       cacheIdentity: 'academic-cap',
     });
   });
+
+  test('rejects an unknown icon pack', () => {
+    let thrown: unknown;
+
+    try {
+      parseIconConfig('unknown-pack', 'check', new URLSearchParams());
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(IconError);
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        code: 'INVALID_CONFIG',
+        message: 'unknown icon pack unknown-pack',
+        stage: 'validation',
+        retryable: false,
+      }),
+    );
+  });
 });
