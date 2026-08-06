@@ -1,15 +1,19 @@
 # Asset Rollout Flags
 
 This Worker uses Cloudflare Flagship boolean flags to roll out asset-delivery behavior without changing public routes,
-headers, binding names, or request and response shapes. All flags default to `false` in code. If Flagship evaluation fails,
-the Worker logs `asset.flag.evaluation_failed` according to `OBSERVABILITY_REPORT_LEVEL` and continues with the `false`
-path.
+headers, binding names, or request and response shapes.
 
-The flags below affect only `GET /v1/assets/:assetId` and `POST /v1/assets/batch`. Icon routes do not use these rollout flags.
+All flags default to `false` in code. If Flagship evaluation fails, the Worker logs
+`asset.flag.evaluation_failed` according to `OBSERVABILITY_REPORT_LEVEL` and continues with the `false` path.
+
+The flags below affect only `GET /v1/assets/:assetId` and `POST /v1/assets/batch`. Icon routes do not use these rollout
+flags.
 
 Asset flags are evaluated lazily through a request-scoped policy snapshot. Each flag is evaluated at most once per asset
-request, including a batch, and values are never reused across requests or isolates. Coordinator and backpressure flags
-are evaluated only after the request reaches a stale-refresh or foreground-miss path where they can affect behavior.
+request, including a batch, and values are never reused across requests or isolates.
+
+Coordinator and backpressure flags are evaluated only after the request reaches a stale-refresh or foreground-miss path
+where they can affect behavior.
 
 ## Flag map
 
@@ -23,45 +27,68 @@ are evaluated only after the request reaches a stale-refresh or foreground-miss 
 
 ## Coordinator traffic
 
-Foreground cold miss:
+### Foreground cold misses
 
-- `asset-upstream-coordinator` off -> direct Roblox
-- `asset-upstream-coordinator` on -> Durable Object
+- `asset-upstream-coordinator` off → resolve directly from Roblox.
+- `asset-upstream-coordinator` on → resolve through the Durable Object coordinator.
 
-Background stale refresh:
+When `asset-upstream-backpressure` is also enabled, coordinator admission control requires
+`ASSET_COORDINATOR_BUDGET_VERIFIED=true`.
 
-- `asset-upstream-coordinator` and `asset-upstream-backpressure` on, budget unverified -> rejected at admission, no
-  Durable Object work
-- otherwise -> Durable Object for distributed single-flight coalescing
+If that safety gate is not enabled, foreground coordinated misses return `503` with `Retry-After: 60` instead of
+performing unverified upstream work.
 
-Stale refresh backpressure is enabled only when `asset-upstream-coordinator`, `asset-upstream-backpressure`, and
-`ASSET_COORDINATOR_BUDGET_VERIFIED=true` are all in place. Enabling `asset-cache-layered` can therefore create Durable
-Object requests for stale background refreshes before foreground coordinator rollout. This has Durable Object operational
-and billing impact, while `asset-upstream-coordinator` still controls foreground cold-miss routing.
+### Background stale refreshes
+
+When `asset-cache-layered` is enabled, stale responses may be returned immediately while refresh work runs in the
+background.
+
+The refresh path behaves as follows:
+
+- `asset-upstream-coordinator` and `asset-upstream-backpressure` on, but the budget gate is unverified → reject the
+  refresh at admission without Durable Object work.
+- Otherwise → use the Durable Object for distributed single-flight refresh coalescing.
+
+Stale refresh backpressure is enabled only when all of these conditions are satisfied:
+
+- `asset-upstream-coordinator` is enabled.
+- `asset-upstream-backpressure` is enabled.
+- `ASSET_COORDINATOR_BUDGET_VERIFIED=true`.
+
+Enabling `asset-cache-layered` can therefore create Durable Object requests for stale background refreshes before
+foreground coordinator rollout.
+
+`asset-upstream-coordinator` still controls whether foreground cold misses use the coordinator.
 
 ## Rollout order
 
-Enable the flags in dependency order:
+Enable the resilience flags in dependency order:
 
 1. `asset-cache-hit-exempt-limit`
 2. `asset-cache-layered`
 3. `asset-upstream-coordinator`
 4. `asset-upstream-backpressure`
 
-`use-asset-delivery-v2` is independent from the resilience rollout. It can be enabled or disabled separately, but v2
-changes cache identity because v2 allows representation-affecting query parameters and headers.
+`use-asset-delivery-v2` is independent from the resilience rollout. It can be enabled or disabled separately.
 
-## Related runtime vars
+Enabling v2 changes cache identity because the v2 path accepts representation-affecting query parameters and headers.
 
-These `wrangler.jsonc` vars are not Flagship flags, but they tune the flagged asset-resolution paths.
+## Runtime configuration
 
-| Var                                           | Default | Purpose                                                                                                                                                                            |
-| --------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ASSET_COORDINATOR_BUDGET_VERIFIED`           | `true`  | Safety gate for `asset-upstream-backpressure`. Keep this `false` until Roblox quota identity and aggregate shard capacity are verified.                                            |
-| `ASSET_COORDINATOR_SHARDS`                    | `16`    | Number of Durable Object shards used by foreground coordination and stale background refresh coalescing. The client hashes each canonical cache key and selects `asset-shard-<n>`. |
-| `ASSET_COORDINATOR_CONCURRENCY`               | `1`     | Maximum active upstream resolutions per coordinator shard when backpressure is enabled.                                                                                            |
-| `ASSET_COORDINATOR_QUEUE_LIMIT`               | `32`    | Maximum queued waiters per coordinator shard when backpressure is enabled. A full queue returns `503` with `Retry-After`.                                                          |
-| `ASSET_COORDINATOR_PERMIT_INTERVAL_MS`        | `1600`  | Minimum spacing between upstream permits per coordinator shard when backpressure is enabled.                                                                                       |
-| `ASSET_COORDINATOR_FALLBACK_COOLDOWN_SECONDS` | `30`    | Cooldown duration used when Roblox returns `429` without a usable `Retry-After` header.                                                                                            |
-| `ASSET_COORDINATOR_OPERATION_DEADLINE_MS`     | `25000` | Request deadline passed to the coordinator for a miss resolution operation.                                                                                                        |
-| `ASSET_COORDINATOR_RETRY_BASE_MS`             | `250`   | Base jittered delay before one retry of retryable upstream failures while backpressure is enabled.                                                                                 |
+The rollout flags depend on runtime controls for coordinator capacity, deadlines, retries, permit spacing, and the
+backpressure safety gate.
+
+See [`runtime-configuration.md`](./runtime-configuration.md) for:
+
+- Current checked-in `ASSET_COORDINATOR_*` values.
+- Accepted ranges and code fallbacks.
+- Binding configuration.
+- Billing and operational impact.
+- Secret configuration.
+
+Runtime values should be maintained in `runtime-configuration.md` rather than duplicated here.
+
+## Related documentation
+
+- [`runtime-configuration.md`](./runtime-configuration.md) — bindings, runtime variables, checked-in values, and secrets.
+- [`api.md`](./api.md) — public asset API behavior, caching, and response contracts.
