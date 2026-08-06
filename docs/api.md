@@ -108,8 +108,7 @@ Batch asset processing permits at most six caller-side asset operations at once.
 
 Duplicate canonical asset identities are grouped before coordinator admission.
 
-Equivalent duplicate items reuse identity preparation, resolution, and base64 serialization while retaining one
-response item per input ID in the original order.
+Equivalent duplicate items coalesce after identity preparation, reusing cache lookup, resolution, and base64 serialization while retaining one response item per input ID in the original order.
 
 A batch makes at most one client rate-limit decision after its cache lookups.
 
