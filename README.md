@@ -92,7 +92,6 @@ Repository-local operational documentation covers configuration that must stay s
 - [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) — asset resilience and rollout flags.
 - [`docs/cd-secrets.md`](./docs/cd-secrets.md) — production deployment credentials and GitHub environment requirements.
 - [`docs/api.md`](./docs/api.md) — public HTTP API behavior.
-- [`docs/performance-optimization.md`](./docs/performance-optimization.md) — measured cost optimizations, verification, and deferred candidates.
 
 ### Secrets
 
