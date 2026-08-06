@@ -317,9 +317,13 @@ export async function getPngFromSvgIcon(
         span.setAttribute('icon.provider', iconConfig.iconType);
         span.setAttribute('icon.output_size', iconConfig.outputSize);
 
+        // Fetch the SVG content first to avoid WASM initialization if the request fails
+        const svgContent = await getSvgIconContent(iconConfig, reportLevel);
+
+        // Initialize WASM and render the PNG
         await ensureWasmReady();
 
-        const svgContent = await getSvgIconContent(iconConfig, reportLevel);
+        // Create the render config and render the PNG
         const renderConfig = createRenderConfig(iconConfig.outputSize, providedConfig);
         const png = renderPng(svgContent, renderConfig, reportLevel);
 
