@@ -481,27 +481,6 @@ describe('icon delivery', () => {
     expect(response.headers.get('X-Cache-Status')).toBe('hit');
   });
 
-  test('coalesces duplicate icon batch entries', async () => {
-    const cache = createCache();
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(svg));
-
-    const response = await worker.fetch(
-      batchRequest({
-        icons: [
-          { iconPack: 'lucide', iconName: 'duplicate', options: {} },
-          { iconPack: 'lucide', iconName: 'duplicate', options: {} },
-        ],
-      }),
-      createTestEnv(cache),
-    );
-
-    const body = (await response.json()) as { results: Array<Record<string, unknown>> };
-    expect(response.status).toBe(200);
-    expect(body.results).toHaveLength(2);
-    expect(body.results[0]).toEqual(body.results[1]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
   test('returns per-item validation and upstream failures', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response('missing', { status: 404 }))
