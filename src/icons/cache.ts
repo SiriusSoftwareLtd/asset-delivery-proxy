@@ -7,6 +7,9 @@
 import type { CacheStatus } from '../assets/types';
 
 export const ICON_CACHE_TTL_SECONDS = 24 * 60 * 60;
+const ICON_L1_ORIGIN = 'https://icon-cache.internal';
+const l1Namespaces = new WeakMap<object, string>();
+let nextL1Namespace = 0;
 export type CachedIconMetadata = { kind: 'icon' | 'not-found'; timestamp: number };
 
 export function iconCacheKey(iconPack: string, normalizedOptions: string, iconName: string): string {
@@ -14,6 +17,50 @@ export function iconCacheKey(iconPack: string, normalizedOptions: string, iconNa
 }
 
 export type IconCacheRead = { value: ArrayBuffer | null; metadata: CachedIconMetadata | null; status: CacheStatus };
+
+function l1Namespace(cache: KVNamespace): string {
+  const existing = l1Namespaces.get(cache);
+  if (existing) return existing;
+  const namespace = String(++nextL1Namespace);
+  l1Namespaces.set(cache, namespace);
+  return namespace;
+}
+
+function iconL1Request(cache: KVNamespace, key: string): Request {
+  return new Request(`${ICON_L1_ORIGIN}/${l1Namespace(cache)}/${encodeURIComponent(key)}`);
+}
+
+export async function readIconL1(cache: KVNamespace, key: string): Promise<IconCacheRead> {
+  try {
+    const response = await caches.default.match(iconL1Request(cache, key));
+    if (!response) return { value: null, metadata: null, status: 'miss' };
+    const timestamp = Number(response.headers.get('X-Icon-Timestamp'));
+    if (!Number.isFinite(timestamp)) return { value: null, metadata: null, status: 'miss' };
+    const value = await response.arrayBuffer();
+    if (value.byteLength === 0) return { value: null, metadata: null, status: 'miss' };
+    return { value, metadata: { kind: 'icon', timestamp }, status: 'l1-hit' };
+  } catch {
+    return { value: null, metadata: null, status: 'miss' };
+  }
+}
+
+export async function populateIconL1(
+  cache: KVNamespace,
+  key: string,
+  png: Uint8Array<ArrayBuffer>,
+  timestamp: number,
+): Promise<void> {
+  await caches.default.put(
+    iconL1Request(cache, key),
+    new Response(png, {
+      headers: {
+        'Cache-Control': `public, max-age=${ICON_CACHE_TTL_SECONDS}`,
+        'Content-Type': 'image/png',
+        'X-Icon-Timestamp': String(timestamp),
+      },
+    }),
+  );
+}
 
 export async function readIconCache(
   cache: KVNamespace,

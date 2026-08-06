@@ -12,13 +12,10 @@ import { parseIconConfig } from '../services/icons/config';
 import { IconError } from '../services/icons/errors';
 import { getPngFromSvgIcon } from '../services/icons/generator';
 import { fetchRayfieldIcon } from '../services/icons/rayfield';
-import { iconCacheKey, readIconCache, writeIconCache } from './cache';
+import { iconCacheKey, populateIconL1, readIconCache, readIconL1, writeIconCache } from './cache';
 
-function asArrayBufferBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
-  const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));
-  copy.set(bytes);
-  return copy;
-}
+type GeneratedIcon = { data: Uint8Array<ArrayBuffer>; timestamp: number; cacheStatus: CacheStatus };
+const iconMisses = new Map<string, Promise<GeneratedIcon>>();
 
 function errorStatus(error: IconError): 400 | 404 | 502 | 504 {
   if (error.code === 'ICON_NOT_FOUND') return 404;
@@ -74,10 +71,29 @@ export async function fetchIcon(
       }
       span.setAttribute('icon.provider', iconPack);
       const key = iconCacheKey(iconPack, parsed.normalizedOptions, parsed.cacheIdentity);
+      const l1 = await readIconL1(c.env.assetCache, key);
+      if (l1.value !== null && l1.metadata?.kind === 'icon') {
+        return {
+          iconPack,
+          iconName,
+          kind: 'icon',
+          status: 200,
+          data: new Uint8Array(l1.value),
+          contentType: 'image/png',
+          cacheStatus: 'l1-hit',
+          cacheHit: true,
+          timestamp: l1.metadata.timestamp,
+        };
+      }
       const cached = await readIconCache(c.env.assetCache, key, (error) =>
         logEvent('warn', 'icon.cache.read_failed', { requestId, ...getErrorFields(error) }, c.env),
       );
       if (cached.value !== null && cached.metadata?.kind === 'icon') {
+        c.executionCtx.waitUntil(
+          populateIconL1(c.env.assetCache, key, new Uint8Array(cached.value), cached.metadata.timestamp).catch(
+            () => undefined,
+          ),
+        );
         return {
           iconPack,
           iconName,
@@ -90,35 +106,46 @@ export async function fetchIcon(
           timestamp: cached.metadata.timestamp,
         };
       }
-      try {
-        const png =
-          parsed.config.iconType === 'rayfield'
-            ? await fetchRayfieldIcon(parsed.config.assetId)
-            : asArrayBufferBytes(
-                await getPngFromSvgIcon(
+      let generation = iconMisses.get(key);
+      if (!generation) {
+        generation = (async (): Promise<GeneratedIcon> => {
+          const png =
+            parsed.config.iconType === 'rayfield'
+              ? await fetchRayfieldIcon(parsed.config.assetId)
+              : await getPngFromSvgIcon(
                   parsed.config,
                   {},
-                  { requestId, reportLevel: c.env.OBSERVABILITY_REPORT_LEVEL },
-                ),
-              );
-        const timestamp = Date.now();
-        let cacheStatus: CacheStatus = cached.status === 'read-error' ? 'read-error' : 'miss';
-        try {
-          await writeIconCache(c.env.assetCache, key, png, timestamp);
-        } catch (error) {
-          cacheStatus = 'write-error';
-          logEvent('warn', 'icon.cache.write_failed', { requestId, ...getErrorFields(error) }, c.env);
-        }
+                  {
+                    requestId,
+                    reportLevel: c.env.OBSERVABILITY_REPORT_LEVEL,
+                  },
+                );
+          const timestamp = Date.now();
+          let cacheStatus: CacheStatus = cached.status === 'read-error' ? 'read-error' : 'miss';
+          try {
+            await writeIconCache(c.env.assetCache, key, png, timestamp);
+          } catch (error) {
+            cacheStatus = 'write-error';
+            logEvent('warn', 'icon.cache.write_failed', { requestId, ...getErrorFields(error) }, c.env);
+          }
+          c.executionCtx.waitUntil(populateIconL1(c.env.assetCache, key, png, timestamp).catch(() => undefined));
+          return { data: png, timestamp, cacheStatus };
+        })();
+        iconMisses.set(key, generation);
+        generation.finally(() => iconMisses.delete(key)).catch(() => undefined);
+      }
+      try {
+        const generated = await generation;
         return {
           iconPack,
           iconName,
           kind: 'icon',
           status: 200,
-          data: png,
+          data: generated.data,
           contentType: 'image/png',
-          cacheStatus,
+          cacheStatus: generated.cacheStatus,
           cacheHit: false,
-          timestamp,
+          timestamp: generated.timestamp,
         };
       } catch (error) {
         const iconError =

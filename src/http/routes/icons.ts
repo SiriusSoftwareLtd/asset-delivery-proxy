@@ -4,24 +4,38 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { iconCacheKey } from '../../icons/cache';
 import { fetchIcon, type IconDeliveryResult } from '../../icons/delivery';
+import { parseIconConfig } from '../../services/icons/config';
 import { mapWithConcurrency } from '../../shared/concurrency';
 import type { AppContext } from '../context';
 import { bytesToBase64 } from '../encoding';
 import { errorResponse } from '../responses';
 
-function iconResultToBatchItem(result: IconDeliveryResult) {
-  if (result.kind === 'icon')
+function iconResultToBatchItem(
+  result: IconDeliveryResult,
+  encodedData: Map<Uint8Array, string>,
+  identity: Pick<IconBatchItem, 'iconPack' | 'iconName'>,
+) {
+  const iconPack = identity.iconPack;
+  const iconName = identity.iconName;
+  if (result.kind === 'icon') {
+    let dataBase64 = encodedData.get(result.data);
+    if (dataBase64 === undefined) {
+      dataBase64 = bytesToBase64(result.data);
+      encodedData.set(result.data, dataBase64);
+    }
     return {
-      iconPack: result.iconPack,
-      iconName: result.iconName,
+      iconPack,
+      iconName,
       status: result.status,
       contentType: result.contentType,
       cacheStatus: result.cacheStatus,
       cacheHit: result.cacheHit,
-      dataBase64: bytesToBase64(result.data),
+      dataBase64,
     };
-  return { iconPack: result.iconPack, iconName: result.iconName, status: result.status, error: result.error };
+  }
+  return { iconPack, iconName, status: result.status, error: result.error };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,11 +88,24 @@ export async function handleIconBatchRequest(c: AppContext): Promise<Response> {
   if (body.icons.length > 50) return errorResponse(c, 'A maximum of 50 icons is allowed', 400);
   if (!body.icons.every(isValidBatchItem))
     return errorResponse(c, 'Each icon must include string iconPack, iconName, and options fields', 400);
-  const results = await mapWithConcurrency(body.icons, 6, async (item) =>
-    iconResultToBatchItem(
-      await fetchIcon(item.iconPack, item.iconName, new URLSearchParams(Object.entries(item.options)), c),
-    ),
-  );
+  const inFlight = new Map<string, Promise<IconDeliveryResult>>();
+  const encodedData = new Map<Uint8Array, string>();
+  const results = await mapWithConcurrency(body.icons, 6, async (item) => {
+    const query = new URLSearchParams(Object.entries(item.options));
+    let key = `${item.iconPack}\0${item.iconName}\0${query.toString()}`;
+    try {
+      const parsed = parseIconConfig(item.iconPack, item.iconName, query);
+      key = iconCacheKey(item.iconPack, parsed.normalizedOptions, parsed.cacheIdentity);
+    } catch {
+      // Keep invalid requests locally coalesced by their original fields.
+    }
+    let operation = inFlight.get(key);
+    if (!operation) {
+      operation = fetchIcon(item.iconPack, item.iconName, query, c);
+      inFlight.set(key, operation);
+    }
+    return iconResultToBatchItem(await operation, encodedData, item);
+  });
   c.set('cacheStatus', 'unknown');
   return c.json({ requestId, results }, 200);
 }

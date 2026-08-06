@@ -19,10 +19,11 @@ import type { IconOperationContext, SvgIconConfig } from './types';
 import { validateSvgIconConfig } from './validation';
 
 /*
- * Initialize once per Worker isolate. Individual requests await the same promise,
- * avoiding repeated Wasm initialization.
+ * Initialize once per Worker isolate, but only after an uncached SVG render
+ * reaches the renderer. The assignment happens synchronously before the first
+ * await, so concurrent first renders share one initialization promise.
  */
-const wasmReady = initWasm(resvgWasm);
+let wasmReady: Promise<void> | undefined;
 
 /**
  * Reads an upstream response incrementally so a missing or dishonest
@@ -189,6 +190,7 @@ function createRenderConfig(outputSize: number, providedConfig: ResvgRenderOptio
 
 async function ensureWasmReady(): Promise<void> {
   try {
+    wasmReady ??= initWasm(resvgWasm);
     await wasmReady;
   } catch (error) {
     throw new IconError('WASM_INITIALIZATION_FAILED', 'The SVG renderer could not be initialized', {
@@ -199,7 +201,11 @@ async function ensureWasmReady(): Promise<void> {
   }
 }
 
-function renderPng(svgContent: Uint8Array, renderConfig: ResvgRenderOptions, reportLevel: string): Uint8Array {
+function renderPng(
+  svgContent: Uint8Array,
+  renderConfig: ResvgRenderOptions,
+  reportLevel: string,
+): Uint8Array<ArrayBuffer> {
   return enterTraceSpan(
     'icon.render',
     (span) => {
@@ -241,7 +247,7 @@ function renderPng(svgContent: Uint8Array, renderConfig: ResvgRenderOptions, rep
       }
     },
     reportLevel,
-  ) as Uint8Array;
+  ) as Uint8Array<ArrayBuffer>;
 }
 
 /**
@@ -294,7 +300,7 @@ export async function getPngFromSvgIcon(
   iconConfig: SvgIconConfig,
   providedConfig: ResvgRenderOptions = {},
   context: IconOperationContext = {},
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const logger = context.logger ?? console;
   const reportLevel = parseReportLevel(context.reportLevel);
 
