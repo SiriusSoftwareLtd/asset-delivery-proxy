@@ -175,4 +175,94 @@ describe('icon configuration parsing', () => {
       }),
     );
   });
+
+  test('rejects an invalid icon name', () => {
+    let thrown: unknown;
+
+    try {
+      parseIconConfig('lucide', 'BadName', new URLSearchParams());
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(IconError);
+
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        code: 'INVALID_ICON_NAME',
+        message: 'iconName must contain only lowercase letters, numbers, hyphens, and underscores',
+        stage: 'validation',
+        retryable: false,
+      }),
+    );
+  });
+
+  test('requires a Remix category', () => {
+    let thrown: unknown;
+
+    try {
+      parseIconConfig('remix', 'home', new URLSearchParams());
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(IconError);
+
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        code: 'INVALID_CONFIG',
+        message: 'category is required',
+        stage: 'validation',
+        retryable: false,
+      }),
+    );
+  });
+
+  test('rejects query options for Rayfield icons', () => {
+    let thrown: unknown;
+
+    try {
+      parseIconConfig(
+        'rayfield',
+        'check',
+        new URLSearchParams({
+          size: '64',
+        }),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(IconError);
+
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        code: 'INVALID_CONFIG',
+        message: 'Rayfield icons do not support query options',
+        stage: 'validation',
+        retryable: false,
+      }),
+    );
+  });
+
+  test('rejects an unknown Rayfield icon', () => {
+    let thrown: unknown;
+
+    try {
+      parseIconConfig('rayfield', 'missing', new URLSearchParams());
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(IconError);
+
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        code: 'ICON_NOT_FOUND',
+        message: 'The requested icon does not exist',
+        stage: 'validation',
+        retryable: false,
+      }),
+    );
+  });
 });

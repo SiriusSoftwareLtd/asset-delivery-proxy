@@ -14,7 +14,10 @@ The service validates asset requests, proxies Roblox asset delivery, applies lay
 - Renders supported SVG icon sources to PNG with `resvg`.
 - Serves allowlisted Rayfield PNG assets without SVG rendering.
 - Uses the Cache API and Workers KV for layered asset caching.
+- Uses Cache API L1 caching for positive icon responses before the Workers KV L2 cache.
 - Uses Durable Objects to coalesce and regulate upstream asset requests.
+- Single-flights identical icon misses within an isolate and reuses duplicate batch work.
+- Initializes the SVG renderer only when an uncached SVG icon needs rendering.
 - Supports negative caching and stale-while-refresh asset delivery.
 - Applies request validation, upstream timeouts, response-size limits, and rate limiting.
 - Emits structured logs, request IDs, cache metadata, metrics, and tracing data.
@@ -228,7 +231,7 @@ pnpm lint
 pnpm coverage
 ```
 
-CI runs type checking, Biome checks, and the coverage suite for pull requests and pushes to `main`.
+CI runs type checking, Biome checks, and the coverage suite for every branch push and when pull requests are opened, updated, or reopened. Successful checks are reused for the same commit to avoid duplicate CI work.
 
 Coverage is enforced per source file.
 

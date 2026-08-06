@@ -74,6 +74,7 @@ function createTestEnv(
     enabledFlags?: string[];
     rateLimit?: () => Promise<{ success: boolean }>;
     assetMetrics?: { writeDataPoint: (point: AnalyticsPoint) => void };
+    flagCalls?: Map<string, number>;
   } = {},
 ): CloudflareBindings {
   return {
@@ -84,7 +85,14 @@ function createTestEnv(
     ASSET_PROXY_RATE_LIMITER: {
       limit: options.rateLimit ?? (async () => ({ success: true })),
     },
-    FLAGS: createFeatureFlags(flagValue, options.enabledFlags),
+    FLAGS: options.flagCalls
+      ? {
+          getBooleanValue: async (name: string, fallback = false) => {
+            options.flagCalls?.set(name, (options.flagCalls.get(name) ?? 0) + 1);
+            return createFeatureFlags(flagValue, options.enabledFlags).getBooleanValue(name, fallback);
+          },
+        }
+      : createFeatureFlags(flagValue, options.enabledFlags),
   } as unknown as CloudflareBindings;
 }
 
@@ -517,11 +525,31 @@ describe('asset delivery', () => {
       createTestEnv(false, createCache(), {
         enabledFlags: ['asset-cache-hit-exempt-limit'],
         rateLimit: limiter,
+        flagCalls: new Map(),
       }),
     );
 
     expect(response.status).toBe(200);
     expect(limiter).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockRestore();
+  });
+
+  test('memoizes asset policy flags across a batch and skips unused backpressure evaluation', async () => {
+    const flagCalls = new Map<string, number>();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([3]), { headers: { 'Content-Type': 'image/png' } }));
+    const response = await worker.fetch(
+      batchRequest({ assetIds: ['7111', '7112', '7111'] }),
+      createTestEnv(false, createCache(), { flagCalls }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(flagCalls.get('use-asset-delivery-v2')).toBe(1);
+    expect(flagCalls.get('asset-cache-layered')).toBe(1);
+    expect(flagCalls.get('asset-upstream-coordinator')).toBe(1);
+    expect(flagCalls.get('asset-upstream-backpressure') ?? 0).toBe(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     fetchMock.mockRestore();
   });

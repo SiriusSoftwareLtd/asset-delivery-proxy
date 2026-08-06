@@ -9,7 +9,8 @@ node_modules/
 !.dev.vars.example
 
 # Wrangler
-.wrangler/
+.wrangler*/
+*.cpuprofile
 
 # Coverage
 coverage/

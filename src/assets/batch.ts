@@ -18,8 +18,13 @@ import { mapWithConcurrency } from '../shared/concurrency';
 export const MAX_BATCH_ASSETS = 25;
 export const MAX_BATCH_CONCURRENCY = 6;
 
-export function assetResultToBatchItem(result: AssetDeliveryResult) {
-  if (result.kind === 'asset')
+export function assetResultToBatchItem(result: AssetDeliveryResult, encodedData = new Map<Uint8Array, string>()) {
+  if (result.kind === 'asset') {
+    let dataBase64 = encodedData.get(result.data);
+    if (dataBase64 === undefined) {
+      dataBase64 = bytesToBase64(result.data);
+      encodedData.set(result.data, dataBase64);
+    }
     return {
       assetId: result.assetId,
       status: result.status,
@@ -27,8 +32,9 @@ export function assetResultToBatchItem(result: AssetDeliveryResult) {
       ...(result.extension ? { extension: result.extension } : {}),
       cacheStatus: result.cacheStatus,
       cacheHit: result.cacheHit,
-      dataBase64: bytesToBase64(result.data),
+      dataBase64,
     };
+  }
   return {
     assetId: result.assetId,
     status: result.status,
@@ -44,6 +50,7 @@ export async function deliverAssetBatch(assetIds: string[], c: AppContext) {
     assetIds.map(async (assetId) => ({ assetId, identity: await prepareAssetIdentity(assetId, c, c.req.raw, useV2) })),
   );
   const inFlight = new Map<string, Promise<AssetDeliveryResult>>();
+  const encodedData = new Map<Uint8Array, string>();
   return mapWithConcurrency(prepared, MAX_BATCH_CONCURRENCY, async ({ assetId, identity }) => {
     let operation = inFlight.get(identity.canonicalKey);
     if (!operation) {
@@ -60,6 +67,6 @@ export async function deliverAssetBatch(assetIds: string[], c: AppContext) {
       });
       inFlight.set(identity.canonicalKey, operation);
     }
-    return assetResultToBatchItem(await operation);
+    return assetResultToBatchItem(await operation, encodedData);
   });
 }

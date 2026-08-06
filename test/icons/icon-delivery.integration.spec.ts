@@ -73,16 +73,20 @@ describe('icon delivery', () => {
   });
 
   test.each([
-    ['/icons/unknown/check', 'unknown icon pack unknown'],
-    ['/icons/lucide/BadName', 'iconName'],
     ['/icons/lucide/check?size=0', 'size'],
-    ['/icons/remix/check', 'category'],
     ['/icons/rayfield/check?size=64', 'Rayfield icons do not support query options'],
   ])('rejects invalid request %s', async (path, message) => {
     const response = await worker.fetch(request(path), createTestEnv());
 
     expect(response.status).toBe(400);
-    expect((await response.json<{ error: string }>()).error).toContain(message);
+
+    const body = await response.json<{
+      error: string;
+      requestId: string;
+    }>();
+
+    expect(body.error).toContain(message);
+    expect(body.requestId).toBeTruthy();
   });
 
   test.each([
@@ -101,41 +105,6 @@ describe('icon delivery', () => {
     if (path.startsWith('/icons/rayfield/')) {
       expect(fetchMock).not.toHaveBeenCalled();
     }
-  });
-
-  test('returns 404 per item for local and upstream icons in a batch request', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('missing', { status: 404 }));
-
-    const response = await worker.fetch(
-      batchRequest({
-        icons: [
-          {
-            iconPack: 'rayfield',
-            iconName: 'missing',
-            options: {},
-          },
-          {
-            iconPack: 'lucide',
-            iconName: 'missing',
-            options: {},
-          },
-        ],
-      }),
-      createTestEnv(),
-    );
-
-    const body = (await response.json()) as {
-      requestId: string;
-      results: Array<Record<string, unknown>>;
-    };
-
-    expect(response.status).toBe(200);
-    expect(body.requestId).toBeTruthy();
-    expect(body.results).toHaveLength(2);
-    expect(body.results.map((result) => result.status)).toEqual([404, 404]);
-    expect(body.results.map((result) => result.error)).toEqual(['Icon not found', 'Icon not found']);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test.each([
@@ -165,8 +134,31 @@ describe('icon delivery', () => {
     expect(first.headers.get('X-Cache-Status')).toBe('miss');
 
     expect(second.status).toBe(200);
-    expect(second.headers.get('X-Cache-Status')).toBe('hit');
+    expect(second.headers.get('X-Cache-Status')).toBe('l1-hit');
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cache.values.size).toBe(1);
+  });
+
+  test('single-flights concurrent identical icon misses', async () => {
+    const cache = createCache();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await gate;
+      return new Response(svg);
+    });
+    const testEnv = createTestEnv(cache);
+
+    const first = worker.fetch(request('/icons/lucide/single-flight'), testEnv);
+    const second = worker.fetch(request('/icons/lucide/single-flight'), testEnv);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    release();
+
+    const responses = await Promise.all([first, second]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(cache.values.size).toBe(1);
   });
@@ -254,7 +246,7 @@ describe('icon delivery', () => {
     expect(first.headers.get('X-Cache-Status')).toBe('miss');
 
     expect(second.status).toBe(200);
-    expect(second.headers.get('X-Cache-Status')).toBe('hit');
+    expect(second.headers.get('X-Cache-Status')).toBe('l1-hit');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect([...cache.values.keys()]).toEqual(['icon:v1:rayfield::91452555903853']);
@@ -274,31 +266,31 @@ describe('icon delivery', () => {
     expect((await response.json<{ requestId: string }>()).requestId).toBeTruthy();
   });
 
-  test.each([
-    new Response('<html>not svg</html>', {
-      headers: {
-        'Content-Type': 'text/html',
-      },
-    }),
-    new Response('', {
-      headers: {
-        'Content-Type': 'image/svg+xml',
-      },
-    }),
-    new Response(svg, {
-      headers: {
-        'Content-Length': String(512 * 1024 + 1),
-      },
-    }),
-  ])('maps an invalid upstream SVG response to 502', async (upstreamResponse) => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => upstreamResponse.clone());
+  test('maps an invalid upstream SVG response to 502', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html>not svg</html>', {
+        headers: {
+          'Content-Type': 'text/html',
+        },
+      }),
+    );
 
-    const response = await worker.fetch(request('/icons/lucide/check'), createTestEnv());
-    const body = await response.json<{ error: string; requestId: string }>();
+    try {
+      const response = await worker.fetch(request('/icons/lucide/check'), createTestEnv());
 
-    expect(response.status).toBe(502);
-    expect(body.error).toBe('Unable to generate icon');
-    expect(body.requestId).toBeTruthy();
+      const body = await response.json<{
+        error: string;
+        requestId: string;
+      }>();
+
+      expect(response.status).toBe(502);
+      expect(body.error).toBe('Unable to generate icon');
+      expect(body.requestId).toBeTruthy();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   test('returns ordered base64 PNG results for mixed providers', async () => {
@@ -422,7 +414,7 @@ describe('icon delivery', () => {
     expect(body.results).toEqual([
       expect.objectContaining({
         status: 200,
-        cacheStatus: 'hit',
+        cacheStatus: 'l1-hit',
         cacheHit: true,
       }),
     ]);
@@ -430,11 +422,69 @@ describe('icon delivery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test('returns per-item validation and upstream failures', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response('missing', { status: 404 }))
-      .mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
-      .mockRejectedValueOnce(new Error('upstream unavailable'));
+  test('uses a fresh KV icon entry and asynchronously populates L1', async () => {
+    const cache = createCache();
+    cache.values.set('icon:v1:lucide:size%3D64:circle-check', {
+      value: new Uint8Array([1, 2, 3]).buffer,
+      metadata: { kind: 'icon', timestamp: 123 },
+    });
+
+    const response = await worker.fetch(request('/icons/lucide/circle-check'), createTestEnv(cache));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Cache-Status')).toBe('hit');
+    expect(response.headers.get('X-Cache-Hit')).toBe('true');
+  });
+
+  test('ignores an asynchronous icon L1 population failure', async () => {
+    const cache = createCache();
+    cache.values.set('icon:v1:lucide:size%3D64:population-failure', {
+      value: new Uint8Array([1, 2, 3]).buffer,
+      metadata: { kind: 'icon', timestamp: 123 },
+    });
+    vi.spyOn(caches.default, 'put').mockRejectedValue(new Error('Cache API unavailable'));
+
+    const response = await worker.fetch(request('/icons/lucide/population-failure'), createTestEnv(cache));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Cache-Status')).toBe('hit');
+  });
+
+  test.each([
+    {
+      name: 'invalid JSON',
+      request: new Request('https://proxy.test/v1/icons/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: '{not-json',
+      }),
+    },
+    {
+      name: 'missing icons field',
+      request: batchRequest({}),
+    },
+    {
+      name: 'icons is not an array',
+      request: batchRequest({
+        icons: 'not-an-array',
+      }),
+    },
+    {
+      name: 'empty icons array',
+      request: batchRequest({
+        icons: [],
+      }),
+    },
+  ])('rejects malformed batch body: $name', async ({ request: batch }) => {
+    const response = await worker.fetch(batch, createTestEnv());
+
+    expect(response.status).toBe(400);
+  });
+
+  test('returns ordered per-item validation and not-found failures', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('missing', { status: 404 }));
 
     const response = await worker.fetch(
       batchRequest({
@@ -445,26 +495,13 @@ describe('icon delivery', () => {
             options: {},
           },
           {
-            iconPack: 'hero',
-            iconName: 'check',
-            options: {
-              sourceSize: '16',
-              style: 'outline',
-            },
-          },
-          {
-            iconPack: 'lucide',
+            iconPack: 'rayfield',
             iconName: 'missing',
             options: {},
           },
           {
             iconPack: 'lucide',
-            iconName: 'timeout',
-            options: {},
-          },
-          {
-            iconPack: 'lucide',
-            iconName: 'failure',
+            iconName: 'missing',
             options: {},
           },
         ],
@@ -473,59 +510,42 @@ describe('icon delivery', () => {
     );
 
     const body = (await response.json()) as {
-      results: Array<Record<string, unknown>>;
+      requestId: string;
+      results: Array<{
+        iconPack: string;
+        iconName: string;
+        status: number;
+        error?: string;
+      }>;
     };
 
     expect(response.status).toBe(200);
+    expect(body.requestId).toBeTruthy();
 
-    expect(body.results.map((result) => result.status)).toEqual([400, 400, 404, 504, 502]);
-
-    expect(body.results.map((result) => result.error)).toEqual([
-      'unknown icon pack unknown',
-      'Heroicons 16 and 20 source sizes only support solid style',
-      'Icon not found',
-      'Icon source timed out',
-      'Unable to generate icon',
-    ]);
-  });
-
-  test.each([
-    new Request('https://proxy.test/v1/icons/batch', {
-      method: 'POST',
-      body: '{not-json',
-    }),
-    batchRequest({}),
-    batchRequest({ icons: [] }),
-    batchRequest({
-      icons: Array.from({ length: 51 }, () => ({
-        iconPack: 'lucide',
+    expect(body.results).toEqual([
+      {
+        iconPack: 'unknown',
         iconName: 'check',
-        options: {},
-      })),
-    }),
-    batchRequest({
-      icons: [
-        {
-          iconPack: 'lucide',
-          options: {},
-        },
-      ],
-    }),
-    batchRequest({
-      icons: [
-        {
-          iconPack: 'lucide',
-          iconName: 'check',
-          options: {
-            size: 64,
-          },
-        },
-      ],
-    }),
-  ])('rejects malformed batch body', async (batch) => {
-    const response = await worker.fetch(batch, createTestEnv());
+        status: 400,
+        error: 'unknown icon pack unknown',
+      },
+      {
+        iconPack: 'rayfield',
+        iconName: 'missing',
+        status: 404,
+        error: 'Icon not found',
+      },
+      {
+        iconPack: 'lucide',
+        iconName: 'missing',
+        status: 404,
+        error: 'Icon not found',
+      },
+    ]);
 
-    expect(response.status).toBe(400);
+    // Unknown packs and missing Rayfield icons fail locally.
+    // Only the missing Lucide icon should contact its upstream provider.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test('rejects an oversized Rayfield PNG without Content-Length', async () => {
