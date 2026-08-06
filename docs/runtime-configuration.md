@@ -7,11 +7,11 @@ Cloudflare resources and replace the binding identifiers in `wrangler.jsonc` wit
 
 | Binding                        | Type                          | Purpose                                                   | Billing and operational impact                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------------ | ----------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `assetCache`                   | Workers KV namespace          | Asset and negative-response cache.                        | KV reads and writes are billable Cloudflare usage. More cache hits reduce Roblox upstream calls and Rate Limiting decisions, but successful asset writes store raw bytes and metadata.                                                                                                                                                                                                                                         |
+| `assetCache`                   | Workers KV namespace          | Persistent asset and icon cache, including negative asset responses. | KV reads and writes are billable Cloudflare usage. Cache API L1 hits avoid KV reads; more persistent cache hits reduce Roblox upstream calls and Rate Limiting decisions, but successful writes store bytes and metadata. |
 | `ASSET_PROXY_RATE_LIMITER`     | Workers Rate Limiting binding | Per-client request limiting.                              | Limit checks are runtime binding operations. With `asset-cache-hit-exempt-limit` enabled, cache hits avoid this binding and only cold misses consume checks.                                                                                                                                                                                                                                                                   |
 | `ASSET_RESOLUTION_COORDINATOR` | Durable Object namespace      | Per-key coalescing, admission, retry, and cooldown state. | Foreground cold misses create Durable Object requests only when `asset-upstream-coordinator` is enabled. Background stale refreshes use this Durable Object when `asset-cache-layered` is enabled so refresh work is distributed and single-flight coalesced, unless the budget gate rejects the refresh at admission first. Higher shard, queue, and concurrency settings can increase DO request volume and active duration. |
 | `ASSET_METRICS`                | Analytics Engine dataset      | Low-cardinality cache and resolution outcomes.            | Each emitted datapoint contributes Analytics Engine ingest volume. Current Cloudflare docs state Workers Analytics Engine is not billed yet, but pricing is published ahead of future billing.                                                                                                                                                                                                                                 |
-| `FLAGS`                        | Cloudflare Flagship binding   | Controls protocol and resilience rollout flags.           | Flag evaluations affect route behavior and can add provider-specific billing depending on the Cloudflare account/product terms. Flag failures fail closed to the `false` path.                                                                                                                                                                                                                                                 |
+| `FLAGS`                        | Cloudflare Flagship binding   | Controls protocol and resilience rollout flags.           | Asset policy flags are lazily evaluated and memoized within each asset request; they are never cached across requests. Flag failures fail closed to the `false` path. |
 
 ## Vars
 
@@ -32,6 +32,14 @@ the code defaults shown below. Do not put credentials in `vars`.
 
 The checked-in numeric coordinator values are inert rollout defaults, not claimed Roblox limits. Treat changes to any
 `ASSET_COORDINATOR_*` var as an upstream-capacity and Durable Object cost review.
+
+Asset Flagship policy is request-scoped. The Worker lazily evaluates each asset policy flag and memoizes the result for
+that request only: cache-hit requests do not evaluate coordinator or backpressure policy that cannot affect the result,
+and non-coordinated misses do not evaluate backpressure. This avoids repeated Flagship work in batches without sharing
+rollout values between requests.
+
+When `OBSERVABILITY_REPORT_LEVEL=off`, disabled request-completion logging does not build its timing and field object.
+Setting `info` or a more verbose level restores the existing structured request event and tracing behavior.
 
 ## Durable Object Rollout Impact
 

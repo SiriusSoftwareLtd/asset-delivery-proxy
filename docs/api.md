@@ -108,6 +108,9 @@ Batch asset processing permits at most six caller-side asset operations at once.
 
 Duplicate canonical asset identities are grouped before coordinator admission.
 
+Equivalent duplicate items reuse identity preparation, resolution, and base64 serialization while retaining one
+response item per input ID in the original order.
+
 A batch makes at most one client rate-limit decision after its cache lookups.
 
 ## Icon delivery
@@ -147,6 +150,9 @@ The following providers use SVG source files:
 - Heroicons.
 
 The proxy retrieves the source SVG and renders it to PNG using `resvg`.
+
+The resvg WebAssembly module initializes lazily on the first uncached SVG render. Health, root, asset, cached-icon,
+and Rayfield PNG paths do not initialize the renderer. Concurrent first SVG renders share one initialization.
 
 ### Output size
 
@@ -354,10 +360,15 @@ Response headers include:
 
 Possible icon cache statuses include:
 
-- `hit`
+- `l1-hit` — served from the data-center-local Cache API.
+- `hit` — served from the persistent Workers KV icon cache.
 - `miss`
 - `read-error`
 - `write-error`
+
+Positive icon entries are checked in the Cache API before Workers KV. A warm L1 hit performs no KV read. A fresh KV hit
+is returned immediately and is populated into L1 asynchronously; Cache API failures fall back to KV. Identical misses
+within one isolate are single-flighted so they share one upstream fetch, render, and KV write.
 
 ### Icon status codes
 
@@ -455,6 +466,10 @@ The outer request returns `400` when:
 
 Batch icon processing permits at most six active icon operations at once.
 
+Duplicate normalized icon requests reuse parsing, cache lookup, upstream/render, cache-write, and base64 work while
+preserving one ordered result per input item. Cache identity includes the provider, icon identity, and all normalized
+representation options.
+
 ## Caching
 
 ### Assets
@@ -476,7 +491,9 @@ Cache behavior may depend on the active rollout flags documented in [`asset-roll
 
 ### Icons
 
-Generated SVG-backed icons and source Rayfield PNG icons are cached in Workers KV for 24 hours.
+Generated SVG-backed icons and source Rayfield PNG icons are cached in the Cache API L1 and Workers KV L2 for 24 hours.
+The Cache API is data-center-local and opportunistic; Workers KV remains the persistent cache. L1 misses and failures
+degrade to the KV path without changing the public response contract.
 
 Successful icon responses also advertise a 5-minute stale-while-revalidate period through `Cache-Control`.
 

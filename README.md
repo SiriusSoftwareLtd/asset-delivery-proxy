@@ -14,7 +14,10 @@ The service validates asset requests, proxies Roblox asset delivery, applies lay
 - Renders supported SVG icon sources to PNG with `resvg`.
 - Serves allowlisted Rayfield PNG assets without SVG rendering.
 - Uses the Cache API and Workers KV for layered asset caching.
+- Uses Cache API L1 caching for positive icon responses before the Workers KV L2 cache.
 - Uses Durable Objects to coalesce and regulate upstream asset requests.
+- Single-flights identical icon misses within an isolate and reuses duplicate batch work.
+- Initializes the SVG renderer only when an uncached SVG icon needs rendering.
 - Supports negative caching and stale-while-refresh asset delivery.
 - Applies request validation, upstream timeouts, response-size limits, and rate limiting.
 - Emits structured logs, request IDs, cache metadata, metrics, and tracing data.
@@ -89,6 +92,7 @@ Repository-local operational documentation covers configuration that must stay s
 - [`docs/asset-rollout-flags.md`](./docs/asset-rollout-flags.md) — asset resilience and rollout flags.
 - [`docs/cd-secrets.md`](./docs/cd-secrets.md) — production deployment credentials and GitHub environment requirements.
 - [`docs/api.md`](./docs/api.md) — public HTTP API behavior.
+- [`docs/performance-optimization.md`](./docs/performance-optimization.md) — measured cost optimizations, verification, and deferred candidates.
 
 ### Secrets
 

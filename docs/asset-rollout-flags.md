@@ -7,6 +7,10 @@ path.
 
 The flags below affect only `GET /v1/assets/:assetId` and `POST /v1/assets/batch`. Icon routes do not use these rollout flags.
 
+Asset flags are evaluated lazily through a request-scoped policy snapshot. Each flag is evaluated at most once per asset
+request, including a batch, and values are never reused across requests or isolates. Coordinator and backpressure flags
+are evaluated only after the request reaches a stale-refresh or foreground-miss path where they can affect behavior.
+
 ## Flag map
 
 | Flag                           | Purpose                                                                                  | `false` behavior                                                                                                                                                           | `true` behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
