@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@resvg/resvg-wasm": "^2.6.2",
-    "hono": "^4.12.32"
+    "hono": "^4.13.0"
   },
   "packageManager": "pnpm@11.18.0",
   "engines": {
