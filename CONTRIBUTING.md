@@ -46,7 +46,7 @@ Fix failures before submitting the pull request.
 
 ## Continuous integration
 
-GitHub Actions runs type checking, Biome checks, and the coverage suite for pull requests and pushes to `main`.
+GitHub Actions runs type checking, Biome checks, and the coverage suite for every branch push and when pull requests are opened, updated, or reopened. Successful checks are reused for the same commit to avoid duplicate CI work.
 
 CI sets `ROBLOX_API_KEY` to the non-secret placeholder `ci-test-key`. CI does not use a real Roblox Open Cloud API key.
 
