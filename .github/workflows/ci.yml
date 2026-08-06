@@ -6,9 +6,13 @@ permissions:
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
     types:
       - opened
+      - synchronize
+      - reopened
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
