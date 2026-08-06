@@ -5,6 +5,7 @@
  */
 
 import { HTTPException } from 'hono/http-exception';
+import { getAssetPolicy } from '../../assets/policy';
 import { limitAssetMiss } from '../../assets/rateLimit';
 import type { AssetResolutionIdentity, AssetResolutionResult, CacheStatus } from '../../assets/types';
 import type { AppContext } from '../../http/context';
@@ -57,36 +58,18 @@ export type AssetDeliveryResult =
       retryAfter?: number;
     };
 
-async function evaluateFlag(c: AppContext, name: string, fallback = false): Promise<boolean> {
-  try {
-    const flagValue = await c.env.FLAGS.getBooleanValue(name, fallback, {
-      environment: c.env.ENVIRONMENT,
-    });
-
-    return flagValue;
-  } catch (error) {
-    logEvent(
-      'warn',
-      'asset.flag.evaluation_failed',
-      { requestId: c.get('requestId'), flag: name, ...getErrorFields(error) },
-      c.env,
-    );
-    return fallback;
-  }
-}
-
 export async function prepareAssetIdentity(
   assetId: string,
   c: AppContext,
   request: Request,
   useAssetDeliveryV2?: boolean,
 ): Promise<AssetResolutionIdentity> {
-  const useV2 = useAssetDeliveryV2 ?? (await evaluateFlag(c, 'use-asset-delivery-v2'));
+  const useV2 = useAssetDeliveryV2 ?? (await getAssetPolicy(c).useDeliveryV2());
   return buildAssetResolutionIdentity(assetId, request, useV2);
 }
 
 export async function shouldUseAssetDeliveryV2(c: AppContext): Promise<boolean> {
-  return evaluateFlag(c, 'use-asset-delivery-v2');
+  return getAssetPolicy(c).useDeliveryV2();
 }
 
 function cachedAssetResult(assetId: string, entry: AssetCacheEntry, cacheStatus: CacheStatus): AssetDeliveryResult {
@@ -325,7 +308,6 @@ async function resolveMiss(
 function scheduleStaleRefresh(
   c: AppContext,
   identity: AssetResolutionIdentity,
-  coordinatorEnabled: boolean,
   backpressureEnabled: boolean,
 ): Promise<void> {
   const existing = staleRefreshes.get(identity.canonicalKey);
@@ -336,7 +318,7 @@ function scheduleStaleRefresh(
     return Promise.resolve();
   }
 
-  const refresh = resolveThroughCoordinator(c.env, identity, coordinatorEnabled && backpressureEnabled).then(
+  const refresh = resolveThroughCoordinator(c.env, identity, backpressureEnabled).then(
     ({ result }) => {
       if (result.cacheWrite === 'failed') {
         logEvent(
@@ -388,12 +370,9 @@ export async function fetchAsset(
         };
       }
 
+      const policy = getAssetPolicy(c);
       const identity = preparedIdentity ?? (await prepareAssetIdentity(assetId, c, request));
-      const [layeredCacheEnabled, coordinatorEnabled, backpressureEnabled] = await Promise.all([
-        evaluateFlag(c, 'asset-cache-layered'),
-        evaluateFlag(c, 'asset-upstream-coordinator'),
-        evaluateFlag(c, 'asset-upstream-backpressure'),
-      ]);
+      const layeredCacheEnabled = await policy.layeredCache();
 
       if (layeredCacheEnabled) {
         const l1 = await readL1(identity);
@@ -444,7 +423,9 @@ export async function fetchAsset(
           return cachedAssetResult(assetId, kv.entry, layeredCacheEnabled ? 'kv-fresh-hit' : 'hit');
         }
         if (layeredCacheEnabled) {
-          c.executionCtx.waitUntil(scheduleStaleRefresh(c, identity, coordinatorEnabled, backpressureEnabled));
+          const coordinatorEnabled = await policy.upstreamCoordinator();
+          const backpressureEnabled = coordinatorEnabled ? await policy.upstreamBackpressure() : false;
+          c.executionCtx.waitUntil(scheduleStaleRefresh(c, identity, backpressureEnabled));
           writeAssetMetric(c.env, {
             resolutionPath: 'kv',
             cacheOutcome: 'stale-hit',
@@ -456,6 +437,8 @@ export async function fetchAsset(
         }
       }
 
+      const coordinatorEnabled = await policy.upstreamCoordinator();
+      const backpressureEnabled = coordinatorEnabled ? await policy.upstreamBackpressure() : false;
       const { delivery, resolution, shard } = await resolveMiss(
         c,
         identity,

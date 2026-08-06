@@ -6,6 +6,7 @@
 
 import { createMiddleware } from 'hono/factory';
 import { logEvent } from '../../observability/logging';
+import { shouldReport } from '../../observability/reportLevel';
 import type { AppEnvironment } from '../context';
 
 export const observeRequests = createMiddleware<AppEnvironment>(async (c, next) => {
@@ -15,18 +16,20 @@ export const observeRequests = createMiddleware<AppEnvironment>(async (c, next) 
   c.set('cacheStatus', 'unknown');
   c.header('X-Request-ID', requestId);
   await next();
-  logEvent(
-    'info',
-    'request.completed',
-    {
-      requestId,
-      method: c.req.method,
-      path: c.req.path,
-      status: c.res.status,
-      cacheStatus: c.get('cacheStatus'),
-      upstreamStatus: c.get('upstreamStatus'),
-      durationMs: Number((performance.now() - startedAt).toFixed(2)),
-    },
-    c.env,
-  );
+  if (shouldReport('info', c.env)) {
+    logEvent(
+      'info',
+      'request.completed',
+      {
+        requestId,
+        method: c.req.method,
+        path: c.req.path,
+        status: c.res.status,
+        cacheStatus: c.get('cacheStatus'),
+        upstreamStatus: c.get('upstreamStatus'),
+        durationMs: Number((performance.now() - startedAt).toFixed(2)),
+      },
+      c.env,
+    );
+  }
 });

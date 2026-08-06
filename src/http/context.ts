@@ -6,6 +6,7 @@
 
 import type { Context } from 'hono';
 import type { BlankInput } from 'hono/types';
+import type { AssetPolicy } from '../assets/policy';
 import type { CacheStatus } from '../assets/types';
 
 export type AppEnvironment = {
@@ -17,6 +18,7 @@ export type AppEnvironment = {
     assetMissLimit?: Promise<boolean>;
     assetLazyLimitEnabled: boolean;
     '.rateLimit'?: boolean;
+    assetPolicy?: AssetPolicy;
   };
 };
 
