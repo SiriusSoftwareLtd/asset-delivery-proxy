@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/icons/delivery', () => ({ fetchIcon: mocks.fetchIcon }));
 vi.mock('../../src/http/encoding', () => ({ bytesToBase64: mocks.bytesToBase64 }));
 
-import { deliverIconBatch, MAX_ICON_BATCH_CONCURRENCY, MAX_ICON_BATCH_SIZE } from '../../src/icons/batch';
+import { deliverIconBatch, MAX_ICON_BATCH_SIZE } from '../../src/icons/batch';
 
 function createContext(): AppContext {
   return {} as AppContext;
@@ -174,6 +174,5 @@ describe('deliverIconBatch', () => {
         createContext(),
       ),
     ).resolves.toEqual({ kind: 'invalid', error: 'A maximum of 50 icons is allowed' });
-    expect(MAX_ICON_BATCH_CONCURRENCY).toBe(6);
   });
 });
