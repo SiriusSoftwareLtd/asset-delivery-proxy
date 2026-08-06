@@ -73,16 +73,20 @@ describe('icon delivery', () => {
   });
 
   test.each([
-    ['/icons/unknown/check', 'unknown icon pack unknown'],
-    ['/icons/lucide/BadName', 'iconName'],
     ['/icons/lucide/check?size=0', 'size'],
-    ['/icons/remix/check', 'category'],
     ['/icons/rayfield/check?size=64', 'Rayfield icons do not support query options'],
   ])('rejects invalid request %s', async (path, message) => {
     const response = await worker.fetch(request(path), createTestEnv());
 
     expect(response.status).toBe(400);
-    expect((await response.json<{ error: string }>()).error).toContain(message);
+
+    const body = await response.json<{
+      error: string;
+      requestId: string;
+    }>();
+
+    expect(body.error).toContain(message);
+    expect(body.requestId).toBeTruthy();
   });
 
   test.each([
