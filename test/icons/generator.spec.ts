@@ -286,4 +286,81 @@ describe('icon generator', () => {
       fetchMock.mockRestore();
     }
   });
+
+  test('rejects an empty upstream SVG response', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('', {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+        },
+      }),
+    );
+
+    try {
+      let thrown: unknown;
+
+      try {
+        await getPngFromSvgIcon({
+          iconType: 'lucide',
+          iconName: 'check',
+          outputSize: 64,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(IconError);
+
+      expect(thrown).toEqual(
+        expect.objectContaining({
+          code: 'EMPTY_SVG',
+          stage: 'upstream',
+          retryable: false,
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test('rejects an SVG whose declared Content-Length exceeds the byte limit', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(svg, {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Content-Length': String(MAX_SVG_BYTES + 1),
+        },
+      }),
+    );
+
+    try {
+      let thrown: unknown;
+
+      try {
+        await getPngFromSvgIcon({
+          iconType: 'lucide',
+          iconName: 'check',
+          outputSize: 64,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(IconError);
+
+      expect(thrown).toEqual(
+        expect.objectContaining({
+          code: 'SVG_TOO_LARGE',
+          stage: 'upstream',
+          retryable: false,
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
 });

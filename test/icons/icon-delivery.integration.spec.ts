@@ -262,31 +262,31 @@ describe('icon delivery', () => {
     expect((await response.json<{ requestId: string }>()).requestId).toBeTruthy();
   });
 
-  test.each([
-    new Response('<html>not svg</html>', {
-      headers: {
-        'Content-Type': 'text/html',
-      },
-    }),
-    new Response('', {
-      headers: {
-        'Content-Type': 'image/svg+xml',
-      },
-    }),
-    new Response(svg, {
-      headers: {
-        'Content-Length': String(512 * 1024 + 1),
-      },
-    }),
-  ])('maps an invalid upstream SVG response to 502', async (upstreamResponse) => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => upstreamResponse.clone());
+  test('maps an invalid upstream SVG response to 502', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html>not svg</html>', {
+        headers: {
+          'Content-Type': 'text/html',
+        },
+      }),
+    );
 
-    const response = await worker.fetch(request('/icons/lucide/check'), createTestEnv());
-    const body = await response.json<{ error: string; requestId: string }>();
+    try {
+      const response = await worker.fetch(request('/icons/lucide/check'), createTestEnv());
 
-    expect(response.status).toBe(502);
-    expect(body.error).toBe('Unable to generate icon');
-    expect(body.requestId).toBeTruthy();
+      const body = await response.json<{
+        error: string;
+        requestId: string;
+      }>();
+
+      expect(response.status).toBe(502);
+      expect(body.error).toBe('Unable to generate icon');
+      expect(body.requestId).toBeTruthy();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   test('returns ordered base64 PNG results for mixed providers', async () => {
