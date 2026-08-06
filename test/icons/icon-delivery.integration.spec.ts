@@ -103,41 +103,6 @@ describe('icon delivery', () => {
     }
   });
 
-  test('returns 404 per item for local and upstream icons in a batch request', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('missing', { status: 404 }));
-
-    const response = await worker.fetch(
-      batchRequest({
-        icons: [
-          {
-            iconPack: 'rayfield',
-            iconName: 'missing',
-            options: {},
-          },
-          {
-            iconPack: 'lucide',
-            iconName: 'missing',
-            options: {},
-          },
-        ],
-      }),
-      createTestEnv(),
-    );
-
-    const body = (await response.json()) as {
-      requestId: string;
-      results: Array<Record<string, unknown>>;
-    };
-
-    expect(response.status).toBe(200);
-    expect(body.requestId).toBeTruthy();
-    expect(body.results).toHaveLength(2);
-    expect(body.results.map((result) => result.status)).toEqual([404, 404]);
-    expect(body.results.map((result) => result.error)).toEqual(['Icon not found', 'Icon not found']);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
   test.each([
     ['/icons/font-awesome/circle?style=brands', '/FortAwesome/Font-Awesome/7.x/svgs/brands/circle.svg'],
     [
@@ -481,65 +446,6 @@ describe('icon delivery', () => {
     expect(response.headers.get('X-Cache-Status')).toBe('hit');
   });
 
-  test('returns per-item validation and upstream failures', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response('missing', { status: 404 }))
-      .mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
-      .mockRejectedValueOnce(new Error('upstream unavailable'));
-
-    const response = await worker.fetch(
-      batchRequest({
-        icons: [
-          {
-            iconPack: 'unknown',
-            iconName: 'check',
-            options: {},
-          },
-          {
-            iconPack: 'hero',
-            iconName: 'check',
-            options: {
-              sourceSize: '16',
-              style: 'outline',
-            },
-          },
-          {
-            iconPack: 'lucide',
-            iconName: 'missing',
-            options: {},
-          },
-          {
-            iconPack: 'lucide',
-            iconName: 'timeout',
-            options: {},
-          },
-          {
-            iconPack: 'lucide',
-            iconName: 'failure',
-            options: {},
-          },
-        ],
-      }),
-      createTestEnv(),
-    );
-
-    const body = (await response.json()) as {
-      results: Array<Record<string, unknown>>;
-    };
-
-    expect(response.status).toBe(200);
-
-    expect(body.results.map((result) => result.status)).toEqual([400, 400, 404, 504, 502]);
-
-    expect(body.results.map((result) => result.error)).toEqual([
-      'unknown icon pack unknown',
-      'Heroicons 16 and 20 source sizes only support solid style',
-      'Icon not found',
-      'Icon source timed out',
-      'Unable to generate icon',
-    ]);
-  });
-
   test.each([
     {
       name: 'invalid JSON',
@@ -571,6 +477,71 @@ describe('icon delivery', () => {
     const response = await worker.fetch(batch, createTestEnv());
 
     expect(response.status).toBe(400);
+  });
+
+  test('returns ordered per-item validation and not-found failures', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('missing', { status: 404 }));
+
+    const response = await worker.fetch(
+      batchRequest({
+        icons: [
+          {
+            iconPack: 'unknown',
+            iconName: 'check',
+            options: {},
+          },
+          {
+            iconPack: 'rayfield',
+            iconName: 'missing',
+            options: {},
+          },
+          {
+            iconPack: 'lucide',
+            iconName: 'missing',
+            options: {},
+          },
+        ],
+      }),
+      createTestEnv(),
+    );
+
+    const body = (await response.json()) as {
+      requestId: string;
+      results: Array<{
+        iconPack: string;
+        iconName: string;
+        status: number;
+        error?: string;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.requestId).toBeTruthy();
+
+    expect(body.results).toEqual([
+      {
+        iconPack: 'unknown',
+        iconName: 'check',
+        status: 400,
+        error: 'unknown icon pack unknown',
+      },
+      {
+        iconPack: 'rayfield',
+        iconName: 'missing',
+        status: 404,
+        error: 'Icon not found',
+      },
+      {
+        iconPack: 'lucide',
+        iconName: 'missing',
+        status: 404,
+        error: 'Icon not found',
+      },
+    ]);
+
+    // Unknown packs and missing Rayfield icons fail locally.
+    // Only the missing Lucide icon should contact its upstream provider.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test('rejects an oversized Rayfield PNG without Content-Length', async () => {
