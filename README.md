@@ -1,5 +1,7 @@
 # Asset Delivery Proxy
 
+[![Gen2 Asset Proxy](https://www.sentivel.com/status/sirius/badge.svg?component=5357cc42-5ebe-4ddd-8a1d-909cca5fd39a)](https://status.sirius.menu)
+
 A Cloudflare Worker that provides Rayfield Gen2 with a controlled asset and icon delivery layer.
 
 The service validates asset requests, proxies Roblox asset delivery, applies layered caching and bounded upstream coordination, renders supported SVG icon packs to PNG, and serves Rayfield's registry-backed PNG icons.
