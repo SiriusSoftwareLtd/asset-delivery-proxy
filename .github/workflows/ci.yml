@@ -5,6 +5,7 @@ permissions:
 
 on:
   push:
+  pull_request:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
