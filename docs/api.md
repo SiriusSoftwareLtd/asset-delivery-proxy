@@ -466,9 +466,7 @@ The outer request returns `400` when:
 
 Batch icon processing permits at most six active icon operations at once.
 
-Duplicate normalized icon requests reuse parsing, cache lookup, upstream/render, cache-write, and base64 work while
-preserving one ordered result per input item. Cache identity includes the provider, icon identity, and all normalized
-representation options.
+Duplicate normalized icon requests coalesce after canonical identity normalization, reusing cache lookup, upstream/render, cache-write, and base64 work while preserving one ordered result per input item.
 
 ## Caching
 
