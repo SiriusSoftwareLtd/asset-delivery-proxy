@@ -231,7 +231,7 @@ pnpm lint
 pnpm coverage
 ```
 
-CI runs type checking, Biome checks, and the coverage suite for pull requests and pushes to `main`.
+CI runs type checking, Biome checks, and the coverage suite for every branch push and when a pull request is opened. Successful checks are reused for the same commit to avoid duplicate CI work.
 
 Coverage is enforced per source file.
 
