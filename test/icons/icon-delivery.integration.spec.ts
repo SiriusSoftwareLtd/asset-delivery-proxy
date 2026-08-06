@@ -165,8 +165,31 @@ describe('icon delivery', () => {
     expect(first.headers.get('X-Cache-Status')).toBe('miss');
 
     expect(second.status).toBe(200);
-    expect(second.headers.get('X-Cache-Status')).toBe('hit');
+    expect(second.headers.get('X-Cache-Status')).toBe('l1-hit');
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cache.values.size).toBe(1);
+  });
+
+  test('single-flights concurrent identical icon misses', async () => {
+    const cache = createCache();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await gate;
+      return new Response(svg);
+    });
+    const testEnv = createTestEnv(cache);
+
+    const first = worker.fetch(request('/icons/lucide/single-flight'), testEnv);
+    const second = worker.fetch(request('/icons/lucide/single-flight'), testEnv);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    release();
+
+    const responses = await Promise.all([first, second]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(cache.values.size).toBe(1);
   });
@@ -254,7 +277,7 @@ describe('icon delivery', () => {
     expect(first.headers.get('X-Cache-Status')).toBe('miss');
 
     expect(second.status).toBe(200);
-    expect(second.headers.get('X-Cache-Status')).toBe('hit');
+    expect(second.headers.get('X-Cache-Status')).toBe('l1-hit');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect([...cache.values.keys()]).toEqual(['icon:v1:rayfield::91452555903853']);
@@ -422,11 +445,60 @@ describe('icon delivery', () => {
     expect(body.results).toEqual([
       expect.objectContaining({
         status: 200,
-        cacheStatus: 'hit',
+        cacheStatus: 'l1-hit',
         cacheHit: true,
       }),
     ]);
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('uses a fresh KV icon entry and asynchronously populates L1', async () => {
+    const cache = createCache();
+    cache.values.set('icon:v1:lucide:size%3D64:circle-check', {
+      value: new Uint8Array([1, 2, 3]).buffer,
+      metadata: { kind: 'icon', timestamp: 123 },
+    });
+
+    const response = await worker.fetch(request('/icons/lucide/circle-check'), createTestEnv(cache));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Cache-Status')).toBe('hit');
+    expect(response.headers.get('X-Cache-Hit')).toBe('true');
+  });
+
+  test('ignores an asynchronous icon L1 population failure', async () => {
+    const cache = createCache();
+    cache.values.set('icon:v1:lucide:size%3D64:population-failure', {
+      value: new Uint8Array([1, 2, 3]).buffer,
+      metadata: { kind: 'icon', timestamp: 123 },
+    });
+    vi.spyOn(caches.default, 'put').mockRejectedValue(new Error('Cache API unavailable'));
+
+    const response = await worker.fetch(request('/icons/lucide/population-failure'), createTestEnv(cache));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Cache-Status')).toBe('hit');
+  });
+
+  test('coalesces duplicate icon batch entries', async () => {
+    const cache = createCache();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(svg));
+
+    const response = await worker.fetch(
+      batchRequest({
+        icons: [
+          { iconPack: 'lucide', iconName: 'duplicate', options: {} },
+          { iconPack: 'lucide', iconName: 'duplicate', options: {} },
+        ],
+      }),
+      createTestEnv(cache),
+    );
+
+    const body = (await response.json()) as { results: Array<Record<string, unknown>> };
+    expect(response.status).toBe(200);
+    expect(body.results).toHaveLength(2);
+    expect(body.results[0]).toEqual(body.results[1]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

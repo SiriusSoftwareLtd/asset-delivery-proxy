@@ -63,4 +63,18 @@ describe('icon generator WASM initialization', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  test('does not initialize WASM when the generator is imported without rendering', async () => {
+    const initWasm = vi.fn(() => Promise.resolve());
+
+    vi.resetModules();
+    vi.doMock('@resvg/resvg-wasm', async () => {
+      const actual = await vi.importActual<typeof import('@resvg/resvg-wasm')>('@resvg/resvg-wasm');
+      return { ...actual, initWasm };
+    });
+
+    await import('../../src/services/icons/generator');
+
+    expect(initWasm).not.toHaveBeenCalled();
+  });
 });
