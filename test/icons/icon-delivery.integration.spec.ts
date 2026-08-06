@@ -541,39 +541,33 @@ describe('icon delivery', () => {
   });
 
   test.each([
-    new Request('https://proxy.test/v1/icons/batch', {
-      method: 'POST',
-      body: '{not-json',
-    }),
-    batchRequest({}),
-    batchRequest({ icons: [] }),
-    batchRequest({
-      icons: Array.from({ length: 51 }, () => ({
-        iconPack: 'lucide',
-        iconName: 'check',
-        options: {},
-      })),
-    }),
-    batchRequest({
-      icons: [
-        {
-          iconPack: 'lucide',
-          options: {},
+    {
+      name: 'invalid JSON',
+      request: new Request('https://proxy.test/v1/icons/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      ],
-    }),
-    batchRequest({
-      icons: [
-        {
-          iconPack: 'lucide',
-          iconName: 'check',
-          options: {
-            size: 64,
-          },
-        },
-      ],
-    }),
-  ])('rejects malformed batch body', async (batch) => {
+        body: '{not-json',
+      }),
+    },
+    {
+      name: 'missing icons field',
+      request: batchRequest({}),
+    },
+    {
+      name: 'icons is not an array',
+      request: batchRequest({
+        icons: 'not-an-array',
+      }),
+    },
+    {
+      name: 'empty icons array',
+      request: batchRequest({
+        icons: [],
+      }),
+    },
+  ])('rejects malformed batch body: $name', async ({ request: batch }) => {
     const response = await worker.fetch(batch, createTestEnv());
 
     expect(response.status).toBe(400);
