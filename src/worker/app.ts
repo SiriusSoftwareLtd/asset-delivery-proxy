@@ -37,21 +37,11 @@ app.use('*', observeRequests);
 
 app.use('*', async (c, next) => {
   const isAssetRoute = c.req.path.startsWith('/v1/assets/');
-  if (isAssetRoute) {
-    try {
-      if (await getAssetPolicy(c).cacheHitExemptLimit()) {
-        c.set('assetLazyLimitEnabled', true);
-        await next();
-        return;
-      }
-    } catch (error) {
-      logEvent(
-        'warn',
-        'asset.flag.evaluation_failed',
-        { requestId: c.get('requestId'), flag: 'asset-cache-hit-exempt-limit', ...getErrorFields(error) },
-        c.env,
-      );
-    }
+
+  if (isAssetRoute && (await getAssetPolicy(c).cacheHitExemptLimit())) {
+    c.set('assetLazyLimitEnabled', true);
+    await next();
+    return;
   }
 
   c.set('assetLazyLimitEnabled', false);
