@@ -18,6 +18,13 @@ export const app = new Hono<AppEnvironment>();
 
 app.use('*', observeRequests);
 
+// Every body here is either bytes from Roblox or JSON we wrote; none of it should ever be
+// content-sniffed into something a browser would execute.
+app.use('*', async (c, next) => {
+  await next();
+  c.res.headers.set('X-Content-Type-Options', 'nosniff');
+});
+
 app.use('*', async (c, next) => {
   const isAssetRoute = c.req.path.startsWith('/v1/assets/');
   if (isAssetRoute) {

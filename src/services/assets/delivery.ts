@@ -292,7 +292,10 @@ async function resolveMiss(
   backpressureEnabled: boolean,
   applyClientLimit = true,
 ): Promise<{ delivery: AssetDeliveryResult; shard?: number; resolution: AssetResolutionResult }> {
-  if (applyClientLimit && c.get('assetLazyLimitEnabled')) await limitAssetMiss(c);
+  // Batches always pay per miss: the global limiter charged the outer request once, and each cold
+  // asset in it is its own upstream fetch. Single requests pay per miss only under lazy limiting,
+  // where the global limiter was skipped.
+  if (applyClientLimit && (c.get('assetLazyLimitEnabled') || c.get('assetBatch'))) await limitAssetMiss(c);
 
   if (coordinatorEnabled) {
     const coordinated = await resolveThroughCoordinator(c.env, identity, backpressureEnabled);

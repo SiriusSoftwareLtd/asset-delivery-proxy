@@ -167,7 +167,7 @@ describe('asset delivery', () => {
     const cache = createCache();
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(Response.json({ location: 'https://cdn.test/asset-202', assetTypeId: 9 }))
+      .mockResolvedValueOnce(Response.json({ location: 'https://cdn.test/asset-202', assetTypeId: 1 }))
       .mockResolvedValueOnce(
         new Response(new Uint8Array([4, 5]), {
           headers: { 'Content-Type': 'model/gltf-binary' },
@@ -178,10 +178,10 @@ describe('asset delivery', () => {
     const cached = await worker.fetch(request('202'), createTestEnv(true, cache));
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('X-Asset-Extension')).toBe('.rbxl');
+    expect(response.headers.get('X-Asset-Extension')).toBe('.png');
     expect(await response.arrayBuffer()).toEqual(new Uint8Array([4, 5]).buffer);
     expect(cached.headers.get('X-Cache-Status')).toBe('hit');
-    expect(cached.headers.get('X-Asset-Extension')).toBe('.rbxl');
+    expect(cached.headers.get('X-Asset-Extension')).toBe('.png');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/v2/assetId/202');
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe('https://cdn.test/asset-202');
@@ -208,6 +208,7 @@ describe('asset delivery', () => {
       .mockResolvedValueOnce(
         Response.json({
           location: 'https://cdn.test/v1-asset',
+          assetTypeId: 1,
         }),
       )
       .mockResolvedValueOnce(
@@ -287,16 +288,19 @@ describe('asset delivery', () => {
     }
   });
 
-  test('authenticates v2 discovery through Open Cloud without dropping allowlisted headers', async () => {
+  test('authenticates v2 discovery through Open Cloud and forwards only representation headers', async () => {
     const cache = createCache();
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/authed' }] }))
+      .mockResolvedValueOnce(Response.json({ locations: [{ location: 'https://cdn.test/authed' }], assetTypeId: 13 }))
       .mockResolvedValueOnce(new Response(new Uint8Array([9])));
 
-    const incoming = request('707');
-    const headers = new Headers(incoming.headers);
+    const incoming = new Request(
+      `${request('707').url}?permissionContext=ctx&accessContext=ctx&modulePlaceId=1&serverplaceid=1&universeId=1`,
+    );
+    const headers = new Headers(request('707').headers);
     headers.set('Roblox-Place-Id', '42');
+    headers.set('Roblox-AssetFormat', 'png');
     const testEnv = { ...createTestEnv(true, cache), ROBLOX_API_KEY: 'session-token' };
     const response = await worker.fetch(new Request(incoming.url, { headers }), testEnv);
 
@@ -304,16 +308,40 @@ describe('asset delivery', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://apis.roblox.com/asset-delivery-api/v1/assetId/707');
     const discoveryRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const discoveryHeaders = new Headers(discoveryRequest.headers);
-    expect(discoveryHeaders.get('Roblox-Place-Id')).toBe('42');
+    expect(discoveryHeaders.get('Roblox-Place-Id')).toBeNull();
+    expect(discoveryHeaders.get('Roblox-AssetFormat')).toBe('png');
     expect(discoveryHeaders.get('x-api-key')).toBe('session-token');
     const locationRequest = fetchMock.mock.calls[1]?.[1] as RequestInit;
     const locationHeaders = new Headers(locationRequest?.headers);
-    expect(locationHeaders.get('Roblox-Place-Id')).toBe('42');
+    expect(locationHeaders.get('Roblox-Place-Id')).toBeNull();
     expect(locationHeaders.has('x-api-key')).toBe(false);
     fetchMock.mockRestore();
   });
 
-  test('accepts authenticated Open Cloud asset bytes without discovery JSON', async () => {
+  test.each([
+    ['a place', 9],
+    ['a model', 10],
+    ['a script', 5],
+    ['an unreported type', undefined],
+  ])('refuses %s through the authenticated path before fetching its bytes', async (_label, assetTypeId) => {
+    const cache = createCache();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ location: 'https://cdn.test/private', assetTypeId }));
+
+    const response = await worker.fetch(request('711'), {
+      ...createTestEnv(true, cache),
+      ROBLOX_API_KEY: 'session-token',
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cache.values.size).toBe(0);
+    fetchMock.mockRestore();
+  });
+
+  test('refuses authenticated Open Cloud bytes that arrive without discovery JSON', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(new Uint8Array([11, 12]), { headers: { 'Content-Type': 'image/png' } }));
@@ -323,9 +351,7 @@ describe('asset delivery', () => {
       ROBLOX_API_KEY: 'session-token',
     });
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get('X-Asset-Extension')).toBe('.png');
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([11, 12]));
+    expect(response.status).toBe(403);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });
@@ -506,7 +532,7 @@ describe('asset delivery', () => {
     fetchMock.mockRestore();
   });
 
-  test('a batch makes one lazy client-limit decision for all unique misses', async () => {
+  test('a batch charges one lazy client-limit unit per unique miss', async () => {
     const limiter = vi.fn(async () => ({ success: true }));
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
@@ -521,8 +547,35 @@ describe('asset delivery', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(limiter).toHaveBeenCalledTimes(1);
+    expect(limiter).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockRestore();
+  });
+
+  test('a batch charges each miss on top of the global unit when lazy limiting is off', async () => {
+    const limiter = vi.fn(async () => ({ success: true }));
+    const cache = createCache();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(new Uint8Array([2]), { headers: { 'Content-Type': 'image/png' } }));
+
+    const cold = await worker.fetch(
+      batchRequest({ assetIds: ['7111', '7112', '7113'] }),
+      createTestEnv(false, cache, { rateLimit: limiter }),
+    );
+    expect(cold.status).toBe(200);
+    // one for the outer request, one for each of the three cold assets
+    expect(limiter).toHaveBeenCalledTimes(4);
+
+    limiter.mockClear();
+    const warm = await worker.fetch(
+      batchRequest({ assetIds: ['7111', '7112', '7113'] }),
+      createTestEnv(false, cache, { rateLimit: limiter }),
+    );
+    expect(warm.status).toBe(200);
+    // cache hits cost nothing beyond the outer request
+    expect(limiter).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     fetchMock.mockRestore();
   });
 
@@ -1439,7 +1492,8 @@ describe('asset delivery', () => {
     const response = await worker.fetch(request('7803'), testEnv);
 
     expect(response.status).toBe(503);
-    expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
+    expect(response.headers.get('Content-Type')).toBe('text/plain; charset=utf-8');
+    expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(response.headers.get('Retry-After')).toBe('4');
 
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([51, 52, 53]));
@@ -1604,7 +1658,7 @@ describe('asset delivery', () => {
         }),
       ]);
 
-      expect(limiter).toHaveBeenCalledTimes(1);
+      expect(limiter).toHaveBeenCalledTimes(2);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();

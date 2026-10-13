@@ -13,13 +13,14 @@ function clientKey(c: AppContext): string {
   return c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For') ?? 'anonymous';
 }
 
+/**
+ * Charges the client one limiter unit for one asset that missed every cache and is about to cost an
+ * upstream fetch. It is called once per miss, not once per request: a batch of 25 cold IDs is 25
+ * fetches from Roblox, and charging it as one let a single client multiply its upstream budget by
+ * the batch size.
+ */
 export async function limitAssetMiss(c: AppContext): Promise<void> {
-  let decision = c.get('assetMissLimit');
-  if (!decision) {
-    decision = c.env.ASSET_PROXY_RATE_LIMITER.limit({ key: clientKey(c) }).then(({ success }) => success);
-    c.set('assetMissLimit', decision);
-  }
-  const success = await decision;
+  const { success } = await c.env.ASSET_PROXY_RATE_LIMITER.limit({ key: clientKey(c) });
   c.set(RATE_LIMIT_CONTEXT_KEY, success);
   if (!success) throw new HTTPException(429, { res: new Response('Too Many Requests', { status: 429 }) });
 }

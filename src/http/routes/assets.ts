@@ -10,6 +10,8 @@ import { type AssetDeliveryResult, fetchAsset, isValidAssetId } from '../../serv
 import type { AppContext } from '../context';
 import { errorResponse } from '../responses';
 
+const PASSTHROUGH_ERROR_CONTENT_TYPE = 'text/plain; charset=utf-8';
+
 function resultToResponse(c: AppContext, result: AssetDeliveryResult): Response {
   c.set('cacheStatus', result.cacheStatus);
   if (result.upstreamStatus !== undefined) c.set('upstreamStatus', result.upstreamStatus);
@@ -31,9 +33,11 @@ function resultToResponse(c: AppContext, result: AssetDeliveryResult): Response 
   const response =
     result.data === undefined
       ? errorResponse(c, result.error, result.status as ContentfulStatusCode)
-      : new Response(result.data, {
+      : // Roblox's error bodies are relayed, but never under Roblox's Content-Type: an HTML error
+        // page served from this origin as text/html would render as our page.
+        new Response(result.data, {
           status: result.status,
-          headers: { ...(result.contentType ? { 'Content-Type': result.contentType } : {}) },
+          headers: { 'Content-Type': PASSTHROUGH_ERROR_CONTENT_TYPE },
         });
   response.headers.set('X-Cache-Hit', 'false');
   response.headers.set('X-Cache-Status', result.cacheStatus);
@@ -63,6 +67,7 @@ export async function handleAssetBatchRequest(c: AppContext): Promise<Response> 
   if (body.assetIds.length > MAX_BATCH_ASSETS)
     return errorResponse(c, `A maximum of ${MAX_BATCH_ASSETS} asset IDs is allowed`, 400);
   if (!body.assetIds.every(isValidAssetId)) return errorResponse(c, 'Invalid Roblox asset ID', 400);
+  c.set('assetBatch', true);
   const results = await deliverAssetBatch(body.assetIds, c);
   c.set('cacheStatus', 'unknown');
   return c.json({ requestId: c.get('requestId'), results }, 200);

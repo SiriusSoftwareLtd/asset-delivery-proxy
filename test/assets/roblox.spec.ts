@@ -4,6 +4,7 @@ import {
   buildRobloxV2Request,
   fetchRobloxAsset,
   getFirstRobloxV2Discovery,
+  isAllowedAssetType,
   isRetryableUpstreamStatus,
   parseRetryAfter,
   RobloxV2RejectedError,
@@ -23,7 +24,7 @@ describe('Roblox asset delivery helpers', () => {
   test('only forwards allowlisted v2 query parameters and headers', () => {
     const request = new Request('https://proxy.test/v1/assets/123?assetVersionId=5&unknown=drop', {
       headers: {
-        'Roblox-Place-Id': '42',
+        'Roblox-AssetFormat': 'PNG',
         'X-Unknown': 'drop',
       },
     });
@@ -34,11 +35,56 @@ describe('Roblox asset delivery helpers', () => {
     expect(result.url).toContain('assetVersionId=5');
     expect(result.url).not.toContain('unknown=');
 
-    expect(headers.get('Roblox-Place-Id')).toBe('42');
+    expect(headers.get('Roblox-AssetFormat')).toBe('PNG');
     expect(headers.get('X-Unknown')).toBeNull();
 
     expect(result.cacheKey).toContain('assetVersionId=5');
-    expect(result.cacheKey).toContain('Roblox-Place-Id=42');
+    expect(result.cacheKey).toContain('Roblox-AssetFormat=png');
+  });
+
+  test('never forwards access-context parameters or the place header', () => {
+    const request = new Request(
+      'https://proxy.test/v1/assets/123?permissionContext=p&accessContext=a&modulePlaceId=1&serverplaceid=2&universeId=3',
+      { headers: { 'Roblox-Place-Id': '42' } },
+    );
+
+    const result = buildRobloxV2Request('123', request);
+    const headers = new Headers(result.init.headers);
+
+    expect(new URL(result.url).search).toBe('');
+    expect(headers.get('Roblox-Place-Id')).toBeNull();
+    expect(result.cacheKey).toBe('v2|123|');
+  });
+
+  test('normalises the cache key across client-varied headers, ordering, and repeats', () => {
+    const plain = buildRobloxV2Request('123', new Request('https://proxy.test/v1/assets/123?assetVersionId=5'));
+    const noisy = buildRobloxV2Request(
+      '123',
+      new Request('https://proxy.test/v1/assets/123?cb=1&assetVersionId=5&assetVersionId=6&assetVersionId=<script>', {
+        headers: { Accept: 'image/*', 'Accept-Encoding': 'br', 'User-Agent': 'x' },
+      }),
+    );
+    const invalid = buildRobloxV2Request(
+      '123',
+      new Request('https://proxy.test/v1/assets/123?assetVersionId=%3Cscript%3E'),
+    );
+
+    expect(noisy.cacheKey).toBe(plain.cacheKey);
+    expect(noisy.url).toBe(plain.url);
+    expect(new Headers(noisy.init.headers).has('Accept-Encoding')).toBe(false);
+    expect(invalid.cacheKey).toBe('v2|123|');
+  });
+
+  test.each([
+    [1, false, true],
+    [13, true, true],
+    [73, true, true],
+    [9, true, false],
+    [9, false, false],
+    [undefined, true, false],
+    [undefined, false, true],
+  ])('asset type %s (authenticated=%s) allowed=%s', (assetTypeId, authenticated, expected) => {
+    expect(isAllowedAssetType(assetTypeId, authenticated)).toBe(expected);
   });
 
   test('skips malformed and insecure discovery locations', () => {
@@ -211,10 +257,8 @@ describe('Roblox asset delivery helpers', () => {
     expect(isRetryableUpstreamStatus(status)).toBe(expected);
   });
 
-  test('accepts an authenticated v2 response without a Content-Type header as asset bytes', async () => {
+  test('refuses an authenticated v2 response that is not discovery JSON, since its type is unknown', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
-
-    let cleanup: (() => Promise<void>) | undefined;
 
     try {
       const result = await fetchRobloxAsset(
@@ -225,18 +269,14 @@ describe('Roblox asset delivery helpers', () => {
         Date.now() + 10_000,
       );
 
-      if (result.kind !== 'response') {
-        throw new Error('Expected Roblox response result');
-      }
-
-      cleanup = result.cleanup;
-
-      expect(result.response.status).toBe(200);
-      expect(result.response.headers.get('Content-Type')).toBeNull();
-
+      expect(result).toEqual({
+        kind: 'rejection',
+        status: 403,
+        error: 'Asset type is not served by this proxy',
+        retryable: false,
+      });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
-      await cleanup?.();
       fetchMock.mockRestore();
     }
   });

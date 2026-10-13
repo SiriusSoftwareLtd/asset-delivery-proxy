@@ -25,6 +25,18 @@ X-Rayfield-Secure-Mode: true
 
 The `X-Rayfield-Secure-Mode` header is required. Requests that do not opt into secure mode receive `403 Forbidden`.
 
+### Accepted asset types and forwarded parameters
+
+The proxy only serves the Roblox asset types Rayfield Gen2 loads: `1` (Image), `13` (Decal), and `73` (FontFamily).
+When the request is made with the Worker's API key, Roblox's discovery response must report one of these types; any
+other type, or a response with no reported type, returns `403` before the asset bytes are fetched.
+
+Access-context inputs are never forwarded to Roblox. `permissionContext`, `accessContext`, `modulePlaceId`,
+`serverplaceid`, `universeId`, and the `Roblox-Place-Id` header are dropped. Only `assetVersionId`,
+`contentRepresentationPriorityList`, and `doNotFallbackToBaselineRepresentation` (first value only, restricted to a safe
+character set) and the `AssetFormat` / `Roblox-AssetFormat` headers are forwarded and form part of the cache key.
+`Accept`, `Accept-Encoding`, and any other client headers do not affect the cache key.
+
 ### Successful asset responses
 
 Successful responses contain the asset bytes returned by Roblox.
@@ -48,6 +60,9 @@ Possible `X-Cache-Status` values include:
 - `negative-hit`
 
 Throttled and queue-rejected responses include `Retry-After`.
+
+Upstream error bodies relayed from Roblox are always sent as `text/plain; charset=utf-8`, never with Roblox's content
+type. Every response carries `X-Content-Type-Options: nosniff`.
 
 When lazy miss limiting is enabled, fresh, stale, and negative-cache hits do not consume the per-client Rate Limiting binding.
 
@@ -108,7 +123,8 @@ Batch asset processing permits at most six caller-side asset operations at once.
 
 Duplicate canonical asset identities are grouped before coordinator admission.
 
-A batch makes at most one client rate-limit decision after its cache lookups.
+A batch charges the client rate limiter one unit for each unique asset that misses every cache, in addition to the
+unit the outer request costs when lazy miss limiting is off. Cache hits inside a batch cost nothing extra.
 
 ## Icon delivery
 

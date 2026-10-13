@@ -11,35 +11,54 @@ const ROBLOX_ASSET_DELIVERY_ORIGIN = 'https://assetdelivery.roblox.com';
 const ROBLOX_OPEN_CLOUD_ASSET_DELIVERY_ORIGIN = 'https://apis.roblox.com';
 const ROBLOX_TIMEOUT_MS = 10_000;
 
-/** Query parameters accepted by Roblox's v2 asset delivery endpoint. */
+/**
+ * Query parameters forwarded to Roblox's v2 asset delivery endpoint.
+ *
+ * Only parameters that select which representation of a public asset comes back are forwarded.
+ * Context parameters (`accessContext`, `permissionContext`, `modulePlaceId`, `serverplaceid`,
+ * `universeId`) and the `Roblox-Place-Id` header are deliberately absent: they ask Roblox to
+ * evaluate access as if the request came from a particular experience, and this proxy
+ * authenticates with our own key, so forwarding them let any caller borrow that key's
+ * permissions for assets it could not otherwise read.
+ */
 export const ROBLOX_V2_QUERY_PARAMS = [
-  'accessContext',
-  'assetName',
   'assetVersionId',
-  'clientInsert',
   'contentRepresentationPriorityList',
   'doNotFallbackToBaselineRepresentation',
-  'expectedAssetType',
-  'hash',
-  'marAssetHash',
-  'marCheckSum',
-  'modulePlaceId',
-  'permissionContext',
-  'scriptinsert',
-  'serverplaceid',
-  'skipSigningScripts',
-  'universeId',
 ] as const;
 
-/** Headers accepted by Roblox's v2 asset delivery endpoint. */
-export const ROBLOX_V2_HEADERS = [
-  'Accept',
-  'Accept-Encoding',
-  'AssetFormat',
-  'AssetType',
-  'Roblox-AssetFormat',
-  'Roblox-Place-Id',
-] as const;
+/**
+ * Headers forwarded to Roblox's v2 asset delivery endpoint. `Accept` and `Accept-Encoding` vary
+ * by client without changing the asset, so they are neither forwarded nor part of the cache key.
+ */
+export const ROBLOX_V2_HEADERS = ['AssetFormat', 'Roblox-AssetFormat'] as const;
+
+/** Values outside this shape are dropped rather than forwarded or keyed on. */
+const FORWARDED_VALUE_PATTERN = /^[A-Za-z0-9_.,:=+/-]{1,256}$/;
+
+/**
+ * Roblox asset types Rayfield Gen2 loads through this proxy: images (1 Image, 13 Decal) and fonts
+ * (73 FontFamily manifests). Anything else — places, models, scripts, packages, audio — is refused
+ * before its bytes are fetched, so the proxy cannot be used to pull arbitrary assets with our key.
+ */
+export const ALLOWED_ASSET_TYPE_IDS: ReadonlySet<number> = new Set([1, 13, 73]);
+
+/**
+ * With our API key attached, a type Roblox did not report cannot be checked, so it is refused. The
+ * unauthenticated public endpoint carries no credentials of ours to borrow; there an unreported
+ * type is let through, and a reported one must still be on the list.
+ */
+export function isAllowedAssetType(assetTypeId: number | undefined, authenticated: boolean): boolean {
+  if (assetTypeId === undefined) return !authenticated;
+  return ALLOWED_ASSET_TYPE_IDS.has(assetTypeId);
+}
+
+const ASSET_TYPE_REJECTION = {
+  kind: 'rejection',
+  status: 403,
+  error: 'Asset type is not served by this proxy',
+  retryable: false,
+} as const;
 
 export type RobloxV2Request = {
   url: string;
@@ -139,19 +158,20 @@ export function buildRobloxV2Request(assetId: string, request: Request): RobloxV
   const incomingUrl = new URL(request.url);
   const url = new URL(`${ROBLOX_ASSET_DELIVERY_ORIGIN}/v2/assetId/${encodeURIComponent(assetId)}`);
 
+  // First value only, in a fixed order, so that repeating or reordering parameters cannot mint
+  // new cache identities (and with them, new upstream fetches) for the same asset.
   for (const name of ROBLOX_V2_QUERY_PARAMS) {
-    for (const value of incomingUrl.searchParams.getAll(name)) {
-      url.searchParams.append(name, value);
-    }
+    const value = incomingUrl.searchParams.get(name);
+    if (value !== null && FORWARDED_VALUE_PATTERN.test(value)) url.searchParams.set(name, value);
   }
 
   const headers = new Headers();
   const cacheHeaders: string[] = [];
   for (const name of ROBLOX_V2_HEADERS) {
-    const value = request.headers.get(name);
-    if (value !== null) {
+    const value = request.headers.get(name)?.trim();
+    if (value && FORWARDED_VALUE_PATTERN.test(value)) {
       headers.set(name, value);
-      cacheHeaders.push(`${name}=${value}`);
+      cacheHeaders.push(`${name}=${value.toLowerCase()}`);
     }
   }
 
@@ -245,6 +265,12 @@ function isJsonResponse(response: Response): boolean {
   return response.headers.get('Content-Type')?.toLowerCase().includes('json') ?? false;
 }
 
+/**
+ * `apiKey` is the Worker's ROBLOX_API_KEY. TODO(security): replace it with a dedicated Open Cloud key
+ * that has asset-delivery read and nothing else (no experience, group, or private-asset access), so
+ * that what a caller can reach through this public proxy is bounded by the key, not only by the
+ * checks here. See docs/runtime-configuration.md.
+ */
 export async function fetchRobloxAsset(
   protocol: 'v1' | 'v2',
   upstreamUrl: string,
@@ -272,8 +298,11 @@ export async function fetchRobloxAsset(
       return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
     }
 
+    // An authenticated answer that is not a discovery document carries no asset type, so there
+    // is nothing to check it against; refuse it rather than relay bytes fetched with our key.
     if (protocol === 'v2' && authenticatedUrl && !isJsonResponse(discoveryResponse)) {
-      return { kind: 'response', response: discoveryResponse, cleanup: discoveryFetch.cleanup };
+      await discoveryFetch.cleanup();
+      return ASSET_TYPE_REJECTION;
     }
 
     let discovery: RobloxV2Discovery;
@@ -282,6 +311,10 @@ export async function fetchRobloxAsset(
       discovery = await parseRobloxV2Discovery(discoveryResponse);
     } finally {
       await discoveryFetch.cleanup();
+    }
+
+    if (!isAllowedAssetType(discovery.assetTypeId, authenticatedUrl !== undefined)) {
+      return ASSET_TYPE_REJECTION;
     }
 
     const assetTimeoutMs = Math.max(

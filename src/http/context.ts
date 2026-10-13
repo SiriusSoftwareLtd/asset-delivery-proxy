@@ -14,7 +14,7 @@ export type AppEnvironment = {
     requestId: string;
     cacheStatus: CacheStatus;
     upstreamStatus?: number;
-    assetMissLimit?: Promise<boolean>;
+    assetBatch?: boolean;
     assetLazyLimitEnabled: boolean;
     '.rateLimit'?: boolean;
   };

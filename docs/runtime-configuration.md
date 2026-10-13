@@ -61,3 +61,10 @@ Do not commit credentials or API tokens. Store sensitive runtime values with Wra
 ```sh
 pnpm exec wrangler secret put ROBLOX_API_KEY
 ```
+
+> **Key scope:** `ROBLOX_API_KEY` should be a dedicated Open Cloud key, created for this Worker alone, with only the
+> asset-delivery read permission and no access to any experience, group, or private asset. The proxy refuses
+> access-context parameters and non-Gen2 asset types, but the key's own scope is the real boundary: anything the key
+> can read is, in principle, reachable through a public proxy. Replace any key shared with other tooling.
+
+The Worker does not use, and must never be given, a Roblox account cookie.
